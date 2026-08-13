@@ -42,6 +42,10 @@ under `"input": {"type": "object", "title": "Input"`.
 `PRICES_VERIFIED_ON` is when the table was last checked. Never edit a price from memory,
 and never quote one in a summary without re-reading the page.
 
+Measured on the first real sweep (2026-08-13, 16/16 cells, $0.90, 1m55s wall): `gpt2` takes
+35–64s per image, the other three 10–14s. So `gpt2` alone sets the wall-clock of any sweep it
+is in, and raising `-c` past ~4 mostly buys time back on that one model.
+
 ## Node 24 runs the TypeScript directly
 
 No build step, no `tsx`, no esbuild — `node src/cli.ts` works because of native type

@@ -68,6 +68,10 @@ targets Replicate rather than four separate APIs.
 `gpt2` follows instructions, `seedream` is cheap and stylises hard, `kontext` comes from a
 different aesthetic lineage entirely. `mwk-og models` prints the current list.
 
+`gpt2` is the slow one — measured at 35–64s an image against 10–14s for the other three, so
+it sets the wall-clock of any sweep it is in. It is also the only one that renders legible
+text. Drop it with `-m nano2,seedream,kontext` when you want a fast look around.
+
 Prices were read off each model's Replicate page on 2026-08-13. Replicate is the source of
 truth; treat the table as an estimate.
 
