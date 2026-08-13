@@ -49,6 +49,27 @@ export interface ModelSpec {
 export const OG_WIDTH = 1200;
 export const OG_HEIGHT = 630;
 
+/**
+ * PROMPT_FIDELITY — why every buildInput pins knobs it appears not to need.
+ *
+ * This tool exists to compare models against each other, which is only meaningful if each
+ * one renders the prompt we actually composed. Several models ship a knob that quietly
+ * rewrites or augments that prompt first, and their defaults do NOT agree:
+ *
+ *   seedream-4      enhance_prompt      defaults TRUE  — rewrites the prompt before render
+ *   flux-kontext-*  prompt_upsampling   defaults false
+ *   nano-banana-*   google_search       defaults false — can pull in outside material
+ *   nano-banana-*   image_search        defaults false
+ *
+ * The seedream default is the one that bit us: the first real sweep (2026-08-13) sent all
+ * four models a byte-identical prompt, but seedream rendered a rewritten one, so its cards
+ * were not comparable with the rest. Every one of these is now set explicitly, including
+ * the ones that already default the way we want — an upstream default is not a promise,
+ * and a silent flip would corrupt a comparison without failing anything.
+ *
+ * Rule: if a new model has a knob that touches the prompt, pin it here, even to its default.
+ */
+
 export const MODELS: ModelSpec[] = [
   {
     id: 'google/nano-banana-2',
@@ -67,6 +88,9 @@ export const MODELS: ModelSpec[] = [
       aspect_ratio: '16:9',
       resolution: tier ?? '1K',
       output_format: 'png',
+      // Pinned, not inherited — see PROMPT_FIDELITY below.
+      google_search: false,
+      image_search: false,
     }),
   },
   {
@@ -108,6 +132,9 @@ export const MODELS: ModelSpec[] = [
       aspect_ratio: '16:9',
       sequential_image_generation: 'disabled',
       max_images: 1,
+      // Defaults to TRUE upstream, which silently rewrites the prompt before rendering.
+      // See PROMPT_FIDELITY below — this is the one that actually bit us.
+      enhance_prompt: false,
     }),
   },
   {
@@ -126,6 +153,8 @@ export const MODELS: ModelSpec[] = [
       ...(refs[0] ? { input_image: refs[0] } : {}),
       aspect_ratio: '16:9',
       output_format: 'png',
+      // Pinned, not inherited — see PROMPT_FIDELITY below.
+      prompt_upsampling: false,
       ...(seed !== undefined ? { seed } : {}),
     }),
   },
@@ -145,6 +174,8 @@ export const MODELS: ModelSpec[] = [
       ...(refs[0] ? { input_image: refs[0] } : {}),
       aspect_ratio: '16:9',
       output_format: 'png',
+      // Pinned, not inherited — see PROMPT_FIDELITY below.
+      prompt_upsampling: false,
       ...(seed !== undefined ? { seed } : {}),
     }),
   },
@@ -165,6 +196,9 @@ export const MODELS: ModelSpec[] = [
       aspect_ratio: '16:9',
       resolution: tier ?? '1K',
       output_format: 'png',
+      // Pinned, not inherited — see PROMPT_FIDELITY below.
+      google_search: false,
+      image_search: false,
     }),
   },
   {

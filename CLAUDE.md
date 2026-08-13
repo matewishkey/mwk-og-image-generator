@@ -72,3 +72,15 @@ so resist adding a direct OpenAI or Google client.
 Phase 1 is the prompt workflow and it is what exists. The web UI is phase 2 — when it
 lands, `src/` is already the library it should call, so keep CLI concerns in `cli.ts` and
 nothing else.
+
+## Prompt fidelity is a correctness property, not a nicety
+
+`PROMPT_FIDELITY` in `src/models.ts` is the long version. The short version: a comparison is
+only meaningful if every model renders the prompt we composed, and several models ship a knob
+that rewrites it first — with *disagreeing* defaults. `seedream-4`'s `enhance_prompt` defaults
+to **true** and silently rewrote our prompt through the whole first sweep (2026-08-13); nothing
+errored, the images simply weren't comparable.
+
+Every prompt-touching knob is now pinned explicitly in `buildInput`, including ones that
+already default correctly. Adding a model means checking its schema for such a knob and
+pinning it too. Do not "tidy up" a pin because it matches the current default.
