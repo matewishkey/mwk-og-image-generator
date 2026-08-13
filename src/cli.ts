@@ -172,9 +172,16 @@ async function cmdGen(argv: string[]): Promise<void> {
     extra: values.extra,
     outDir,
     concurrency,
+    onRetry: (cell, attempt, waitMs, message) => {
+      const why = /429|throttled/i.test(message) ? 'throttled' : 'interrupted';
+      console.log(
+        `  … idea ${cell.ideaIndex} / ${cell.model} ${why}, retry ${attempt} in ${Math.round(waitMs / 1000)}s`,
+      );
+    },
     onCell: (cell, done, count) => {
       const mark = cell.error ? '✗' : '✓';
-      const tail = cell.error ? cell.error.slice(0, 70) : `${cell.seconds}s`;
+      const retried = cell.retries ? ` (after ${cell.retries} retr${cell.retries > 1 ? 'ies' : 'y'})` : '';
+      const tail = cell.error ? cell.error.slice(0, 90) : `${cell.seconds}s${retried}`;
       const where = `idea ${cell.ideaIndex} · ${cell.style} / ${cell.model} #${cell.iteration}`;
       console.log(`${mark} [${done}/${count}] ${where} — ${tail}`);
     },

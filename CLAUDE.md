@@ -137,3 +137,23 @@ nano-banana-2 spelled its speech bubbles perfectly. What `gpt2` did that the oth
 was render the *fifth thing in the prompt* — the off-camera second screen with the metrics on
 it, the detail carrying the joke. It costs ~5x the wall-clock for that. Explore cheap, finish
 on gpt2. Don't reinstate the spelling claim.
+
+## Transient failures are retried, not reported as holes
+
+`retryDelayMs()` in `run.ts` absorbs two real platform failures: Replicate's 429 (it throttles
+to 6/min with a burst of 1 whenever the account balance falls under $5 — this is a *billing*
+symptom that looks like a code bug) and its "Prediction interrupted; please retry (code: PA)".
+It honours the `retry_after` value out of the error body in preference to any backoff we would
+invent. A prompt-level failure — moderation, a bad input field — is NOT retried and must stay
+that way, or a genuine mistake gets billed four times.
+
+## gpt-image-2: tiers and going direct
+
+Both settled by experiment, so don't relitigate them from intuition:
+
+- `high` ($0.128) over `medium` ($0.047) buys marginally finer detail and no better
+  composition. `medium` is the default for good reason; more iterations beat a higher tier.
+- Calling `api.openai.com` directly gets the SAME model, the SAME low/medium/high tiers and
+  the same parameter set, for MORE money — $0.165 vs $0.128 at high, confirmed against a real
+  billed call returning 5,488 output image tokens at OpenAI's published $30/M. There is no
+  hidden better tier behind the direct API. Do not add a direct OpenAI client.

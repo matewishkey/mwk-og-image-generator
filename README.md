@@ -82,6 +82,9 @@ targets Replicate rather than four separate APIs.
 | `seedream` | `bytedance/seedream-4` | $0.030 | up to 10 |
 | `kontext` | `black-forest-labs/flux-kontext-max` | $0.080 | **1 only** |
 | `kontext-pro` | `black-forest-labs/flux-kontext-pro` | $0.040 | 1 only |
+| `ideogram3` | `ideogram-ai/ideogram-v3-quality` | $0.090 | 1 style ref |
+| `imagen4` | `google/imagen-4-ultra` | $0.060 | **none — text only** |
+| `recraft3` | `recraft-ai/recraft-v3` | $0.040 | **none — text only** |
 | `nanopro` | `google/nano-banana-pro` | $0.150 (1K) | up to 14 |
 | `gpt15` | `openai/gpt-image-1.5` | $0.050 (medium) | up to 10 |
 
@@ -101,6 +104,15 @@ Replicate. `flux-2-flex` exists at $0.060 and is deliberately excluded — its
 `gpt2` is the slow one — measured at 35–68s an image against 10–27s for the others, so it
 sets the wall-clock of any sweep it is in. Drop it with `-m nano2,seedream45,flux2` when you
 want a fast look around.
+
+**On `gpt2`'s quality tiers.** Measured on an identical four-prompt A/B: `high` ($0.128) buys
+slightly finer detail than `medium` ($0.047) and composes no better. Stay on `medium` and
+spend the difference on more iterations. `low` ($0.012) is for thumbnails only.
+
+**Going direct to OpenAI gains nothing.** Verified with a real billed call: the same prompt at
+`high` costs $0.165 through `api.openai.com` (5,488 output image tokens at $30/M) against
+$0.128 on Replicate, for the same model, the same three quality tiers and the same parameter
+set. Replicate is a passthrough with a better price, not a restricted tier.
 
 **What GPT Image 2 is actually better at.** Not spelling — given the same two-panel comic
 prompt with `--allow-text`, Nano Banana 2 spelled its speech bubbles perfectly too. The

@@ -312,6 +312,66 @@ export const MODELS: ModelSpec[] = [
       output_format: 'png',
     }),
   },
+  {
+    id: 'ideogram-ai/ideogram-v3-quality',
+    modality: 'image',
+    alias: 'ideogram3',
+    label: 'Ideogram v3 Quality',
+    refStyle: 'single',
+    refField: 'style_reference_images',
+    maxRefs: 1,
+    tiers: ['default'],
+    priceUsd: { default: 0.09 },
+    seedable: true,
+    notes: 'The typography specialist — reach for it when legible text in the picture is the point.',
+    buildInput: ({ prompt, refs, seed }) => ({
+      prompt,
+      aspect_ratio: '16:9',
+      style_type: 'None',
+      // magic_prompt_option defaults to "Auto", which rewrites the prompt before rendering.
+      // See PROMPT_FIDELITY above — same trap as seedream-4's enhance_prompt.
+      magic_prompt_option: 'Off',
+      ...(refs[0] ? { style_reference_images: [refs[0]] } : {}),
+      ...(seed !== undefined ? { seed } : {}),
+    }),
+  },
+  {
+    id: 'google/imagen-4-ultra',
+    modality: 'image',
+    alias: 'imagen4',
+    label: 'Imagen 4 Ultra',
+    refStyle: 'none',
+    maxRefs: 0,
+    tiers: ['1K', '2K'],
+    priceUsd: { '1K': 0.06, '2K': 0.06 },
+    seedable: false,
+    // TEXT ONLY. It has no image input at all, so it can never render a specific person.
+    notes: 'Google photoreal flagship. TEXT-ONLY — cannot take a reference photo, so no likenesses.',
+    buildInput: ({ prompt, tier }) => ({
+      prompt,
+      aspect_ratio: '16:9',
+      image_size: tier ?? '1K',
+      output_format: 'png',
+    }),
+  },
+  {
+    id: 'recraft-ai/recraft-v3',
+    modality: 'image',
+    alias: 'recraft3',
+    label: 'Recraft v3',
+    refStyle: 'none',
+    maxRefs: 0,
+    tiers: ['any', 'digital_illustration', 'realistic_image'],
+    priceUsd: { any: 0.04, digital_illustration: 0.04, realistic_image: 0.04 },
+    seedable: false,
+    // TEXT ONLY, and the tier is its `style` enum rather than a quality level.
+    notes: 'Built for brand and graphic-design output. TEXT-ONLY. --tier picks its style family.',
+    buildInput: ({ prompt, tier }) => ({
+      prompt,
+      size: '1536x1024',
+      style: tier ?? 'any',
+    }),
+  },
 
   // ── video ──────────────────────────────────────────────────────────────────
   {

@@ -35,6 +35,8 @@ export interface Cell {
   prompt: string;
   costUsd: number;
   seconds?: number;
+  /** How many times this cell was retried past a transient platform error. */
+  retries?: number;
   error?: string;
 }
 
@@ -71,6 +73,8 @@ export interface RunOpts {
   concurrency: number;
   /** Called as each cell settles, for progress output. */
   onCell?: (cell: Cell, done: number, total: number) => void;
+  /** Called when a cell hits a transient error and is about to wait and retry. */
+  onRetry?: (cell: Cell, attempt: number, waitMs: number, message: string) => void;
 }
 
 /**
@@ -118,6 +122,27 @@ function pickTier(model: ModelSpec, requested?: string): string {
   return model.tiers[0];
 }
 
+/**
+ * Transient failures worth retrying rather than losing the cell.
+ *
+ * Two have actually bitten us: a 429 when the account balance drops under $5 (Replicate
+ * throttles hard to 6/min with a burst of 1), and Replicate's own "Prediction interrupted;
+ * please retry (code: PA)". Both are the platform asking us to wait, not the prompt being
+ * wrong, so a sweep should absorb them instead of reporting a hole.
+ */
+function retryDelayMs(message: string, attempt: number): number | null {
+  const throttled = /\b429\b|too many requests|throttled/i.test(message);
+  const interrupted = /prediction interrupted|code: PA\b|\b5\d\d\b/i.test(message);
+  if (!throttled && !interrupted) return null;
+
+  // Replicate tells us exactly how long to wait; trust it over a guessed backoff.
+  const hinted = message.match(/"retry_after"\s*:\s*(\d+)/);
+  if (hinted) return (Number(hinted[1]) + 1) * 1000;
+  return Math.min(30_000, 2 ** attempt * 2_000);
+}
+
+const MAX_ATTEMPTS = 4;
+
 async function runCell(
   cell: Cell,
   model: ModelSpec,
@@ -132,8 +157,22 @@ async function runCell(
     const seconds = pickSeconds(model, opts.seconds);
     const input = model.buildInput({ prompt: cell.prompt, refs: usable, tier: cell.tier, seconds });
 
-    const output = await replicate().run(model.id as `${string}/${string}`, { input });
-    const bytes = await firstOutput(output);
+    let bytes: Buffer | undefined;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const output = await replicate().run(model.id as `${string}/${string}`, { input });
+        bytes = await firstOutput(output);
+        break;
+      } catch (e) {
+        const msg = (e as Error).message;
+        const wait = attempt < MAX_ATTEMPTS ? retryDelayMs(msg, attempt) : null;
+        if (wait === null) throw e;
+        cell.retries = attempt;
+        opts.onRetry?.(cell, attempt, wait, msg);
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
+    if (!bytes) throw new Error('Exhausted retries with no output');
 
     const stem = `i${cell.ideaIndex}__${style.slug}__${model.alias}__${cell.iteration}`;
     const text = { title: opts.title, kicker: opts.kicker };
