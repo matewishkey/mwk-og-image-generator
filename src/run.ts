@@ -1,7 +1,7 @@
 /**
- * A run is one idea, shot through a set of styles and a set of models.
+ * A run is a set of idea variants, shot through a set of styles and a set of models.
  *
- * The grid is styles x models x iterations. Every cell is independent, so cells run
+ * The grid is ideas x styles x models x iterations. Every cell is independent, so cells run
  * concurrently and a cell that fails is recorded and skipped rather than taking the
  * run down — a sweep that loses one model to a content filter is still worth looking at.
  */
@@ -15,6 +15,9 @@ import { firstImage, replicate, toDataUri } from './replicate.ts';
 import type { Style } from './style.ts';
 
 export interface Cell {
+  /** Which idea variant this cell rendered, and its 1-based position in the run. */
+  idea: string;
+  ideaIndex: number;
   style: string;
   model: string;
   modelId: string;
@@ -32,7 +35,7 @@ export interface Cell {
 export interface RunManifest {
   runId: string;
   startedAt: string;
-  idea: string;
+  ideas: string[];
   title: string;
   kicker?: string;
   refs: string[];
@@ -42,7 +45,8 @@ export interface RunManifest {
 }
 
 export interface RunOpts {
-  idea: string;
+  /** One or more idea variants. The grid is ideas x styles x models x iterations. */
+  ideas: string[];
   styles: Style[];
   models: ModelSpec[];
   iterations: number;
@@ -50,6 +54,8 @@ export interface RunOpts {
   title: string;
   kicker?: string;
   tier?: string;
+  /** Who the reference person is in the scene. See ComposeOpts.refRole. */
+  refRole?: string;
   extra?: string;
   outDir: string;
   concurrency: number;
@@ -58,9 +64,11 @@ export interface RunOpts {
 }
 
 /** Cost of a run before it starts. Cheap insurance against a typo in `-n`. */
-export function estimate(opts: Pick<RunOpts, 'styles' | 'models' | 'iterations' | 'tier'>): number {
+export function estimate(
+  opts: Pick<RunOpts, 'ideas' | 'styles' | 'models' | 'iterations' | 'tier'>,
+): number {
   const perRound = opts.models.reduce((sum, m) => sum + priceOf(m, pickTier(m, opts.tier)), 0);
-  return perRound * opts.styles.length * opts.iterations;
+  return perRound * opts.styles.length * opts.ideas.length * opts.iterations;
 }
 
 /** A tier the model actually offers, or its default. `--tier` is a hint, not a demand. */
@@ -85,7 +93,7 @@ async function runCell(
     const output = await replicate().run(model.id as `${string}/${string}`, { input });
     const art = await firstImage(output);
 
-    const stem = `${style.slug}__${model.alias}__${cell.iteration}`;
+    const stem = `i${cell.ideaIndex}__${style.slug}__${model.alias}__${cell.iteration}`;
     cell.artFile = join('art', `${stem}.png`);
     await writeFile(join(opts.outDir, cell.artFile), art);
 
@@ -123,28 +131,33 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
     const styleRefs = style.refs.length ? await Promise.all(style.refs.map(toDataUri)) : [];
     const cellRefs = [...styleRefs, ...refUris];
 
-    for (const model of opts.models) {
-      const tier = pickTier(model, opts.tier);
-      for (let i = 1; i <= opts.iterations; i++) {
-        queue.push({
-          style,
-          model,
-          refs: cellRefs,
-          cell: {
-            style: style.slug,
-            model: model.alias,
-            modelId: model.id,
-            iteration: i,
-            tier,
-            prompt: compose({
-              style,
-              idea: opts.idea,
-              hasRefs: cellRefs.length > 0,
-              extra: opts.extra,
-            }),
-            costUsd: priceOf(model, tier),
-          },
-        });
+    for (const [ideaIndex, idea] of opts.ideas.entries()) {
+      for (const model of opts.models) {
+        const tier = pickTier(model, opts.tier);
+        for (let i = 1; i <= opts.iterations; i++) {
+          queue.push({
+            style,
+            model,
+            refs: cellRefs,
+            cell: {
+              idea,
+              ideaIndex: ideaIndex + 1,
+              style: style.slug,
+              model: model.alias,
+              modelId: model.id,
+              iteration: i,
+              tier,
+              prompt: compose({
+                style,
+                idea,
+                hasRefs: cellRefs.length > 0,
+                refRole: opts.refRole,
+                extra: opts.extra,
+              }),
+              costUsd: priceOf(model, tier),
+            },
+          });
+        }
       }
     }
   }
@@ -166,6 +179,7 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
 
   results.sort(
     (a, b) =>
+      a.ideaIndex - b.ideaIndex ||
       a.style.localeCompare(b.style) ||
       a.model.localeCompare(b.model) ||
       a.iteration - b.iteration,
@@ -174,7 +188,7 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
   const manifest: RunManifest = {
     runId: opts.outDir.split('/').pop() ?? 'run',
     startedAt: new Date().toISOString(),
-    idea: opts.idea,
+    ideas: opts.ideas,
     title: opts.title,
     kicker: opts.kicker,
     refs: opts.refs,

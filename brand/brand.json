@@ -1,17 +1,41 @@
 {
-  "$comment": "Mate Wish Key OG card. Palette lifted from mwk-replayer's tokens so the cards match the site.",
+  "$comment": "Mate Wish Key OG card, built from the published design system at matewishkey.com/design. Dark-theme tokens throughout, because the band is always a dark ground.",
   "canvas": { "width": 1200, "height": 630 },
   "colors": {
-    "ground": "#0d1014",
-    "accent": "#e2342b",
-    "accentSoft": "#f0524a",
+    "paper": "#101317",
     "ink": "#f4f2f6",
-    "mute": "#a8a2b0"
+    "mute": "#a8a2b0",
+    "faint": "#8e8896",
+    "red": "#e2342b",
+    "redField": "#c9251d",
+    "redDeep": "#f0524a",
+    "line": "#232c3a",
+    "onRed": "#ffffff"
   },
   "scrim": { "startY": 300, "opacity": 0.96 },
-  "band": { "height": 138, "opacity": 0.94, "ruleHeight": 3 },
-  "logo": { "file": "brand/mwk-mark-white.svg", "height": 46, "x": 56 },
-  "title": { "size": 38, "weight": 800, "gap": 30, "maxLines": 2 },
-  "kicker": { "size": 15, "weight": 700, "tracking": 2600 },
-  "font": { "family": "Manrope", "file": "brand/fonts/Manrope[wght].ttf" }
+  "band": { "height": 150, "opacity": 0.94, "ruleHeight": 3 },
+  "logo": {
+    "$comment": "The RedBlock is the only logo: a red square, square corners, white mark centred at 64%. Never a bare mark.",
+    "mark": "brand/mwk-mark-white.svg",
+    "size": 76,
+    "markScale": 0.64,
+    "x": 56
+  },
+  "title": {
+    "$comment": "Display heading. Fraunces 700 per the design system.",
+    "family": "Fraunces",
+    "file": "brand/fonts/Fraunces[SOFT,WONK,opsz,wght].ttf",
+    "size": 38,
+    "weight": 700,
+    "gap": 28
+  },
+  "kicker": {
+    "$comment": "LABEL/KICKER: JetBrains Mono 700, uppercase, 0.16em tracking, red-deep — the only red allowed at body size.",
+    "family": "JetBrains Mono",
+    "file": "brand/fonts/JetBrainsMono[wght].ttf",
+    "size": 15,
+    "weight": 700,
+    "trackingEm": 0.16,
+    "gapBelow": 12
+  }
 }

@@ -84,3 +84,29 @@ errored, the images simply weren't comparable.
 Every prompt-touching knob is now pinned explicitly in `buildInput`, including ones that
 already default correctly. Adding a model means checking its schema for such a knob and
 pinning it too. Do not "tidy up" a pin because it matches the current default.
+
+## The brand layer follows a published design system, not taste
+
+`brand/brand.json` encodes matewishkey.com/design. The bits that are easy to get wrong:
+
+- **The RedBlock is the only logo** — a red `#e2342b` square, square corners, white mark
+  centred at 64%. Never composite a bare mark, and never hand-build a second red square
+  elsewhere; `redBlock()` in `brand.ts` builds the one.
+- **Fraunces 700** sets display headings, **JetBrains Mono 700** uppercase at 0.16em tracking
+  sets kickers, Manrope is body only. Tracking is converted to Pango units (1024 per point)
+  from ems at render time, so changing the kicker size keeps the tracking proportional.
+- **`redDeep` `#f0524a` is the only red permitted at body size** — kickers and links. The
+  `red` token is a surface/display colour: the block and the accent rule.
+- Pango here maps `weight` onto a variable font's wght axis but does **not** support the
+  `font_variations` attribute, so Fraunces' WONK and SOFT axes are unreachable. Verified;
+  don't spend time trying to enable the wonk.
+
+## --ref-role: models disagree about who the reference is
+
+With reference photos and two people in the scene, each model decides for itself which
+person the reference depicts, and they decide differently — on the 2026-08-13 honeypot run
+nano-banana-2 cast the reference as the interviewer while gpt-image-2 put him on the monitor
+as the candidate. Nothing errored; the picture just argued the opposite case.
+
+`--ref-role` emits an explicit assignment plus "everyone else is a different individual".
+Any scene with more than one person needs it. See `ComposeOpts.refRole`.

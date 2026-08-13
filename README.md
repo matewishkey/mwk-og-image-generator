@@ -12,13 +12,17 @@ image that comparison costs less than the time spent staring at a single disappo
 
 ```
 mwk-og gen -p "a recruiter asks a honey-trap question and the candidate pauses too long" \
-           --ref refs/me.jpg \
+           -p "the same interview, seen over the recruiter's shoulder" \
+           --ref refs/me.jpg --ref-role "the interviewer" \
            --title "Honey-trap questions that catch AI candidates" \
-           --kicker "Mate Wish Key" -n 2
+           --kicker "Mate Wish Key"
 ```
 
-That renders every style you have across the default four models, brands all of them, and
-writes a contact sheet you open in a browser.
+That renders both ideas through every style you have across the default four models, brands
+all of them, and writes a contact sheet you open in a browser.
+
+Repeat `-p` to iterate a concept. The grid is **ideas × styles × models × iterations**, and
+`--dry-run` prices it before you commit.
 
 ## The two axes
 
@@ -32,6 +36,17 @@ are independent on purpose:
 
 Styles are plain YAML in `styles/`, so a good one is a file you keep, edit and commit.
 
+## Naming who the reference person is
+
+`--ref-role` matters more than it looks. Give a model reference photos and a scene with two
+people in it, and it has to decide which person the reference is — and models decide
+differently. On the first honeypot run, Nano Banana 2 correctly cast the reference as the
+interviewer while GPT Image 2 put him on the monitor as the *candidate*: the exact opposite
+of the point the image was making. Nothing failed; the picture was just wrong.
+
+`--ref-role "the interviewer"` states the assignment and adds that everyone else in the
+frame is somebody else. Use it for any scene with more than one person.
+
 ## Branding is composited, not generated
 
 The AI makes artwork. The brand band — logo, headline, accent rule — is drawn by code with
@@ -43,8 +58,12 @@ about 50ms, for $0.00, on every image forever. Correspondingly every generated p
 with an instruction to render *no* text and to keep the bottom fifth of the frame calm, so
 the band always has somewhere quiet to land.
 
-Layout and palette live in `brand/brand.json`. Point `logo.file` at your own mark and change
-the colours — nothing else is Mate Wish Key-specific.
+Layout, palette and type live in `brand/brand.json`, built from the published design system
+at [matewishkey.com/design](https://matewishkey.com/design/): the RedBlock (a red square with
+the white mark centred at 64%) is the only logo, Fraunces 700 sets the headline, JetBrains
+Mono 700 uppercase at 0.16em sets the kicker, and red-deep `#f0524a` is the only red allowed
+at body size. Point it at your own mark, fonts and colours — nothing else in the code is Mate
+Wish Key-specific.
 
 `mwk-og brand <file> --title "..."` re-brands any image with no API call at all, which is
 also how you re-title a card without paying to regenerate it.
@@ -101,7 +120,7 @@ node src/cli.ts --help
 ## Commands
 
 ```
-gen         render a sweep: styles x models x iterations, then brand every result
+gen         render a sweep: ideas x styles x models x iterations, then brand every result
 brainstorm  invent new styles from an idea and save them as style files
 styles      list the styles you have
 models      list the models, their reference limits and their per-image price
@@ -130,4 +149,5 @@ web UI is phase 2.
 
 ## Licence
 
-MIT. Manrope is bundled under the SIL Open Font License; see `brand/fonts/OFL.txt`.
+MIT. Fraunces, Manrope and JetBrains Mono are bundled under the SIL Open Font License; each
+licence sits beside the fonts in `brand/fonts/`.

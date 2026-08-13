@@ -26,14 +26,33 @@ export interface ComposeOpts {
   idea: string;
   /** True when reference images are attached, which changes how we address the subject. */
   hasRefs: boolean;
+  /**
+   * Who the reference person is *within* the scene, e.g. "the interviewer".
+   *
+   * Needed whenever the scene contains more than one person. Left unsaid, models guess,
+   * and they guess differently: on the 2026-08-13 honeypot run, nano-banana-2 correctly
+   * cast the reference as the interviewer while gpt-image-2 put him on the monitor as the
+   * candidate — the exact opposite of the point being made. Naming the role, and saying
+   * plainly that everyone else is someone else, fixed it.
+   */
+  refRole?: string;
   /** Extra free-text appended verbatim, for one-off nudges. */
   extra?: string;
 }
 
-export function compose({ style, idea, hasRefs, extra }: ComposeOpts): string {
+export function compose({ style, idea, hasRefs, refRole, extra }: ComposeOpts): string {
   const parts: string[] = [];
 
   parts.push(idea.trim());
+
+  if (hasRefs && refRole?.trim()) {
+    parts.push(
+      `ROLE ASSIGNMENT: the person in the reference image(s) is ${refRole.trim()}, and only ` +
+        `that person. Every other person in the scene is a different individual and must not ` +
+        `resemble the reference image(s) in face, hair or build.`,
+    );
+  }
+
   parts.push(`Visual style: ${style.look.trim()}`);
 
   if (style.subject.trim()) {

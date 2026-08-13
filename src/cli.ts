@@ -29,12 +29,15 @@ const USAGE = `mwk-og — branded OG images from a style + a prompt
   brand       re-brand an image you already have (no API call, no cost)
 
 gen
-  -p, --prompt <idea>      what is happening in the image            (required)
+  -p, --prompt <idea>      what is happening; repeat -p for variants  (required)
   -s, --style <slug>       style to use; repeat or comma-separate    (default: all)
       --all-styles         every style in styles/
   -m, --model <alias>      repeat or comma-separate                  (default: ${DEFAULT_SWEEP.join(',')})
   -n, --iterations <n>     renders per style/model cell              (default: 1)
       --ref <path>         reference image; repeat for more
+      --ref-role <who>     who the reference person is in the scene, e.g. "the
+                           interviewer" — REQUIRED for any scene with two people,
+                           or models disagree about who the reference is
       --title <text>       headline burned into the brand band       (default: the prompt)
       --kicker <text>      small red line above the title
       --tier <key>         quality/resolution hint, e.g. low, 2K
@@ -74,12 +77,13 @@ async function cmdGen(argv: string[]): Promise<void> {
   const { values } = parseArgs({
     args: argv,
     options: {
-      prompt: { type: 'string', short: 'p' },
+      prompt: { type: 'string', short: 'p', multiple: true },
       style: { type: 'string', short: 's', multiple: true },
       'all-styles': { type: 'boolean' },
       model: { type: 'string', short: 'm', multiple: true },
       iterations: { type: 'string', short: 'n' },
       ref: { type: 'string', multiple: true },
+      'ref-role': { type: 'string' },
       title: { type: 'string' },
       kicker: { type: 'string' },
       tier: { type: 'string' },
@@ -90,8 +94,8 @@ async function cmdGen(argv: string[]): Promise<void> {
     },
   });
 
-  const idea = values.prompt;
-  if (!idea) fail('gen needs -p "<what is happening>"');
+  const ideas = values.prompt ?? [];
+  if (!ideas.length) fail('gen needs -p "<what is happening>" (repeat -p for idea variants)');
 
   const wanted = multi(values.style);
   const all = await listStyles();
@@ -108,16 +112,17 @@ async function cmdGen(argv: string[]): Promise<void> {
   if (!Number.isInteger(iterations) || iterations < 1) fail('-n must be a positive integer');
 
   const refs = multi(values.ref);
-  const title = values.title ?? idea;
+  const title = values.title ?? ideas[0];
   const outDir = values.out ?? join('out', `${today()}_${slugify(title)}`);
   const concurrency = Number(values.concurrency ?? 4);
 
-  const est = estimate({ styles, models, iterations, tier: values.tier });
-  const total = styles.length * models.length * iterations;
+  const est = estimate({ ideas, styles, models, iterations, tier: values.tier });
+  const total = ideas.length * styles.length * models.length * iterations;
 
   console.log(`styles  ${styles.map((s) => s.slug).join(', ')}`);
   console.log(`models  ${models.map((m) => `${m.alias} (${m.id})`).join(', ')}`);
-  console.log(`grid    ${styles.length} x ${models.length} x ${iterations} = ${total} images`);
+  console.log(`ideas   ${ideas.length}`);
+  console.log(`grid    ${ideas.length} x ${styles.length} x ${models.length} x ${iterations} = ${total} images`);
   console.log(`refs    ${refs.length ? refs.join(', ') : '(none)'}`);
   console.log(`cost    ~$${est.toFixed(2)}`);
   console.log(`out     ${outDir}`);
@@ -126,7 +131,15 @@ async function cmdGen(argv: string[]): Promise<void> {
     console.log('\n(dry run — nothing called)');
     console.log('\n--- prompt that would be sent for the first cell ---\n');
     const { compose } = await import('./prompt.ts');
-    console.log(compose({ style: styles[0], idea, hasRefs: refs.length > 0, extra: values.extra }));
+    console.log(
+      compose({
+        style: styles[0],
+        idea: ideas[0],
+        hasRefs: refs.length > 0,
+        refRole: values['ref-role'],
+        extra: values.extra,
+      }),
+    );
     return;
   }
 
@@ -134,7 +147,7 @@ async function cmdGen(argv: string[]): Promise<void> {
   console.log('');
 
   const manifest = await runSweep({
-    idea,
+    ideas,
     styles,
     models,
     iterations,
@@ -142,13 +155,15 @@ async function cmdGen(argv: string[]): Promise<void> {
     title,
     kicker: values.kicker,
     tier: values.tier,
+    refRole: values['ref-role'],
     extra: values.extra,
     outDir,
     concurrency,
     onCell: (cell, done, count) => {
       const mark = cell.error ? '✗' : '✓';
       const tail = cell.error ? cell.error.slice(0, 70) : `${cell.seconds}s`;
-      console.log(`${mark} [${done}/${count}] ${cell.style} / ${cell.model} #${cell.iteration} — ${tail}`);
+      const where = `idea ${cell.ideaIndex} · ${cell.style} / ${cell.model} #${cell.iteration}`;
+      console.log(`${mark} [${done}/${count}] ${where} — ${tail}`);
     },
   });
 
