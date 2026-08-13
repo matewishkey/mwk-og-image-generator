@@ -156,7 +156,25 @@ brainstorm  invent new styles from an idea and save them as style files
 styles      list the styles you have
 models      list the models, their reference limits and their per-image price
 brand       re-brand an image you already have (no API call, no cost)
+montage     combine several picked cards into one branded image (no API call, no cost)
 ```
+
+## The montage — several picks, one card
+
+The end of the workflow. Sweep, pick a winner per scene off the contact sheet, then combine:
+
+```
+mwk-og montage art/scene1.png art/scene2.png art/scene3.png art/scene4.png \
+  --label "At home" --label "Teaching a friend" --label "At work" --label "At NASA" \
+  --title "Vibe coding isn't the same everywhere you do it" --kicker "Vibe coding" --og
+```
+
+Panels keep their true aspect ratio — four 16:9 frames forced into a 1200x630 OG shape become
+letterboxed strips and stop reading, so the canvas is as tall as the grid needs (1200x826 for
+a 2x2) and `--og` writes the cropped OG variant alongside it.
+
+**Feed it the unbranded `art/` frames, not the `og/` cards**, or every panel arrives carrying
+its own brand band.
 
 `gen --dry-run` prints the grid, the total cost and the exact prompt the first cell would
 send, without calling anything. Use it whenever `-n` looks ambitious.

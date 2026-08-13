@@ -10,6 +10,7 @@ import { parseArgs } from 'node:util';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { applyBrand, loadBrand } from './brand.ts';
+import { montage } from './montage.ts';
 import { DEFAULT_SWEEP, MODELS, PRICES_VERIFIED_ON, resolveModel, priceOf } from './models.ts';
 import { BRAINSTORM_SYSTEM, brainstormPrompt, parseBrainstorm } from './prompt.ts';
 import { runSweep, estimate, refMegapixels } from './run.ts';
@@ -27,6 +28,7 @@ const USAGE = `mwk-og — branded OG images from a style + a prompt
   styles      list the styles you have
   models      list the models, their reference limits and their per-image price
   brand       re-brand an image you already have (no API call, no cost)
+  montage     combine several picked cards into one branded image (no API call, no cost)
 
 gen
   -p, --prompt <idea>      what is happening; repeat -p for variants  (required)
@@ -55,6 +57,17 @@ brainstorm
   -n, --count <n>          how many styles                           (default: 4)
       --ref <path>         show the brainstormer a reference image
       --save               write them to styles/ (otherwise just prints)
+
+montage
+      <file...>            the images to combine, in reading order — use the UNBRANDED
+                           art/ frames, not the og/ cards, or every panel carries its
+                           own band
+      --label <text>       caption for each panel; repeat, one per image
+      --title <text>       headline for the band
+      --kicker <text>      small red line above the title
+      --columns <n>        panels per row                            (default: 2)
+      --og                 also write a cropped 1200x630 version
+  -o, --out <file>         output path                               (default: montage.png)
 
 brand
       <file>               the artwork to brand
@@ -266,6 +279,48 @@ function cmdModels(): void {
   console.log(`* = in the default sweep`);
 }
 
+async function cmdMontage(argv: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      label: { type: 'string', multiple: true },
+      title: { type: 'string' },
+      kicker: { type: 'string' },
+      columns: { type: 'string' },
+      og: { type: 'boolean' },
+      out: { type: 'string', short: 'o' },
+    },
+  });
+
+  if (!positionals.length) fail('montage needs image files: mwk-og montage a.png b.png ...');
+
+  const brand = await loadBrand();
+  const out = await montage({
+    images: await Promise.all(positionals.map((p) => readFile(p))),
+    labels: values.label ?? [],
+    brand,
+    title: values.title,
+    kicker: values.kicker,
+    columns: values.columns ? Number(values.columns) : 2,
+  });
+
+  const dest = values.out ?? 'montage.png';
+  await writeFile(dest, out);
+  const md = await (await import('sharp')).default(out).metadata();
+  console.log(`✓ ${dest}  ${md.width}x${md.height}`);
+
+  if (values.og) {
+    const ogDest = dest.replace(/\.png$/, '') + '.og.png';
+    const sharp = (await import('sharp')).default;
+    await writeFile(
+      ogDest,
+      await sharp(out).resize(1200, 630, { fit: 'cover', position: 'top' }).png().toBuffer(),
+    );
+    console.log(`✓ ${ogDest}  1200x630 (cropped — panels lose their edges)`);
+  }
+}
+
 async function cmdBrand(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -310,6 +365,9 @@ try {
       break;
     case 'brand':
       await cmdBrand(rest);
+      break;
+    case 'montage':
+      await cmdMontage(rest);
       break;
     case undefined:
     case '-h':

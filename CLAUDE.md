@@ -157,3 +157,17 @@ Both settled by experiment, so don't relitigate them from intuition:
   the same parameter set, for MORE money — $0.165 vs $0.128 at high, confirmed against a real
   billed call returning 5,488 output image tokens at OpenAI's published $30/M. There is no
   hidden better tier behind the direct API. Do not add a direct OpenAI client.
+
+## Cheap models changed the workflow
+
+`zturbo` ($0.0025, ~5s) and `pimage` ($0.005, ~3s) are together under a cent and render in
+seconds. They are not as good as `gpt2`, and that is not the point: they are good enough to
+test whether a *scene idea* works before spending 20x finishing it. Draft cheap, finish on
+`gpt2`. Don't reach for the expensive model while the composition is still in question.
+
+## montage takes art/, not og/
+
+`src/montage.ts` composites picked frames into one card. Feeding it the branded `og/` cards
+gives every panel its own brand band — the mistake is easy, silent, and looks absurd. The
+help text says so; keep it saying so. Panels keep their true aspect ratio and the canvas
+grows to fit, because four 16:9 frames squeezed into 1200x630 become unreadable strips.

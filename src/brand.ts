@@ -77,7 +77,7 @@ function esc(s: string): string {
  * support the `font_variations` attribute, so Fraunces' WONK and SOFT axes are out of
  * reach and the face renders at its default optical settings. Verified, not assumed.
  */
-async function textLayer(opts: {
+export async function textLayer(opts: {
   text: string;
   font: FontSpec;
   color: string;
@@ -142,17 +142,20 @@ async function redBlock(b: BrandConfig): Promise<Buffer> {
 }
 
 /** The scrim, the band and the accent rule, as one SVG overlay. */
-function furnitureSvg(b: BrandConfig): Buffer {
+function furnitureSvg(b: BrandConfig, scrim = true): Buffer {
   const { width: W, height: H } = b.canvas;
   const bandY = H - b.band.height;
-  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
-  <defs>
+  const scrimParts = scrim
+    ? `<defs>
     <linearGradient id="scrim" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="${b.colors.paper}" stop-opacity="0"/>
       <stop offset="1" stop-color="${b.colors.paper}" stop-opacity="${b.scrim.opacity}"/>
     </linearGradient>
   </defs>
-  <rect x="0" y="${b.scrim.startY}" width="${W}" height="${H - b.scrim.startY}" fill="url(#scrim)"/>
+  <rect x="0" y="${b.scrim.startY}" width="${W}" height="${H - b.scrim.startY}" fill="url(#scrim)"/>`
+    : '';
+  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
+  ${scrimParts}
   <rect x="0" y="${bandY}" width="${W}" height="${b.band.height}" fill="${b.colors.paper}" fill-opacity="${b.band.opacity}"/>
   <rect x="0" y="${bandY}" width="${W}" height="${b.band.ruleHeight}" fill="${b.colors.red}"/>
 </svg>`);
@@ -190,13 +193,21 @@ export async function brandOverlay(
   width: number,
   height: number,
   text: { title?: string; kicker?: string },
+  /**
+   * The scrim exists to blend a photograph into the band. A montage has a hard grid
+   * edge above the band instead, and a gradient there just dirties the bottom panels —
+   * so montage passes false.
+   */
+  opts: { scrim?: boolean } = {},
 ): Promise<Buffer> {
   const b = width === brand.canvas.width && height === brand.canvas.height
     ? brand
     : scaleBrand(brand, width, height);
   const bandY = height - b.band.height;
 
-  const layers: OverlayOptions[] = [{ input: furnitureSvg(b), top: 0, left: 0 }];
+  const layers: OverlayOptions[] = [
+    { input: furnitureSvg(b, opts.scrim ?? true), top: 0, left: 0 },
+  ];
   layers.push(...(await bandContents(b, bandY, width, text)));
 
   return sharp({
