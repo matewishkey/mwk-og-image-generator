@@ -171,3 +171,11 @@ test whether a *scene idea* works before spending 20x finishing it. Draft cheap,
 gives every panel its own brand band — the mistake is easy, silent, and looks absurd. The
 help text says so; keep it saying so. Panels keep their true aspect ratio and the canvas
 grows to fit, because four 16:9 frames squeezed into 1200x630 become unreadable strips.
+
+## Scoping --allow-text to one surface
+
+A screen inside the scene — a laptop showing code, a monitor showing a UI — is text in the
+picture, which the default frame rules forbid outright. `--allow-text` on its own overshoots:
+it also invites captions, speech bubbles and signage. Pair it with an `--extra` clause naming
+the screen as the *only* permitted text and the rest stays clean. Used on the vibe-coding
+panel 2 (2026-08-13) and it held.
