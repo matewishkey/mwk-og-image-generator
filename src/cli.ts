@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { applyBrand, loadBrand } from './brand.ts';
 import { DEFAULT_SWEEP, MODELS, PRICES_VERIFIED_ON, resolveModel, priceOf } from './models.ts';
 import { BRAINSTORM_SYSTEM, brainstormPrompt, parseBrainstorm } from './prompt.ts';
-import { runSweep, estimate } from './run.ts';
+import { runSweep, estimate, refMegapixels } from './run.ts';
 import { writeReadme, writeSheet } from './sheet.ts';
 import { listStyles, loadStyle, saveStyle, slugify, type Style } from './style.ts';
 import { runText, toDataUri } from './replicate.ts';
@@ -116,14 +116,17 @@ async function cmdGen(argv: string[]): Promise<void> {
   const outDir = values.out ?? join('out', `${today()}_${slugify(title)}`);
   const concurrency = Number(values.concurrency ?? 4);
 
-  const est = estimate({ ideas, styles, models, iterations, tier: values.tier });
+  const refMp = await refMegapixels(refs.filter((r) => !/^https?:|^data:/i.test(r)));
+  const est = estimate({ ideas, styles, models, iterations, tier: values.tier }, refMp);
   const total = ideas.length * styles.length * models.length * iterations;
 
   console.log(`styles  ${styles.map((s) => s.slug).join(', ')}`);
   console.log(`models  ${models.map((m) => `${m.alias} (${m.id})`).join(', ')}`);
   console.log(`ideas   ${ideas.length}`);
   console.log(`grid    ${ideas.length} x ${styles.length} x ${models.length} x ${iterations} = ${total} images`);
-  console.log(`refs    ${refs.length ? refs.join(', ') : '(none)'}`);
+  console.log(
+    `refs    ${refs.length ? `${refs.join(', ')} (${refMp.toFixed(2)} MP total)` : '(none)'}`,
+  );
   console.log(`cost    ~$${est.toFixed(2)}`);
   console.log(`out     ${outDir}`);
 

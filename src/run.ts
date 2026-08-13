@@ -8,6 +8,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import sharp from 'sharp';
 import { applyBrand, loadBrand, type BrandConfig } from './brand.ts';
 import { compose } from './prompt.ts';
 import { priceOf, type ModelSpec } from './models.ts';
@@ -63,11 +64,35 @@ export interface RunOpts {
   onCell?: (cell: Cell, done: number, total: number) => void;
 }
 
+/**
+ * Total megapixels of a set of reference images.
+ *
+ * Measured, not assumed: the FLUX 2 family bills per input megapixel, so the difference
+ * between a phone photo and a downscaled thumbnail is real money.
+ */
+export async function refMegapixels(paths: string[]): Promise<number> {
+  const sizes = await Promise.all(
+    paths.map(async (p) => {
+      try {
+        const { width = 0, height = 0 } = await sharp(p).metadata();
+        return (width * height) / 1_000_000;
+      } catch {
+        return 0;
+      }
+    }),
+  );
+  return sizes.reduce((a, b) => a + b, 0);
+}
+
 /** Cost of a run before it starts. Cheap insurance against a typo in `-n`. */
 export function estimate(
   opts: Pick<RunOpts, 'ideas' | 'styles' | 'models' | 'iterations' | 'tier'>,
+  refMp = 0,
 ): number {
-  const perRound = opts.models.reduce((sum, m) => sum + priceOf(m, pickTier(m, opts.tier)), 0);
+  const perRound = opts.models.reduce(
+    (sum, m) => sum + priceOf(m, pickTier(m, opts.tier), m.refStyle === 'single' ? 0 : refMp),
+    0,
+  );
   return perRound * opts.styles.length * opts.ideas.length * opts.iterations;
 }
 
@@ -115,6 +140,7 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
   await mkdir(join(opts.outDir, 'og'), { recursive: true });
 
   const refUris = await Promise.all(opts.refs.map(toDataUri));
+  const runRefMp = await refMegapixels(opts.refs.filter((r) => !/^https?:|^data:/i.test(r)));
 
   interface Job {
     cell: Cell;
@@ -154,7 +180,13 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
                 refRole: opts.refRole,
                 extra: opts.extra,
               }),
-              costUsd: priceOf(model, tier),
+              // Single-reference models only ever receive one image, so they are never
+              // billed for the rest of the pile.
+              costUsd: priceOf(
+                model,
+                tier,
+                model.refStyle === 'single' ? runRefMp / Math.max(cellRefs.length, 1) : runRefMp,
+              ),
             },
           });
         }
@@ -192,7 +224,7 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
     title: opts.title,
     kicker: opts.kicker,
     refs: opts.refs,
-    estimatedUsd: estimate(opts),
+    estimatedUsd: estimate(opts, runRefMp),
     actualUsd: results.reduce((s, c) => s + c.costUsd, 0),
     cells: results,
   };

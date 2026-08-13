@@ -1,0 +1,20 @@
+name: Marked-Up Memo
+description: For sharp, knowing advice that should feel like a confidential note
+  passed around a smart office.
+look: A graphic collage built from scanned paper, typed memorandum fragments,
+  photocopied forms, underlines, circles, and sparse pen annotations. Palette is
+  off-white, faded black, bureaucratic blue, and one assertive red correction
+  mark, with toner noise, folded-paper shadows, and imperfect registration. The
+  composition should feel like a desk document enlarged into a bold editorial
+  cover.
+subject: Render the person as a grainy halftone cutout or ID-photo-style
+  portrait integrated into the paper layout. Keep the face legible but slightly
+  anonymized by cropping, marker strokes, or overlapping labels, as though it
+  belongs in an internal case file.
+avoid: clean vector icons, neon colors, glossy photography, dense paperwork
+refs: []
+tags:
+  - collage
+  - memo
+  - editorial
+origin: openai/gpt-5.6-terra

@@ -77,19 +77,30 @@ targets Replicate rather than four separate APIs.
 |---|---|---|---|
 | `nano2` * | `google/nano-banana-2` | $0.067 (1K) | up to 14 |
 | `gpt2` * | `openai/gpt-image-2` | $0.047 (medium) | up to 10 |
-| `seedream` * | `bytedance/seedream-4` | $0.030 | up to 10 |
-| `kontext` * | `black-forest-labs/flux-kontext-max` | $0.080 | **1 only** |
+| `seedream45` * | `bytedance/seedream-4.5` | $0.040 | up to 10 |
+| `flux2` * | `black-forest-labs/flux-2-pro` | $0.030 + $0.015/input MP | up to 10 |
+| `seedream` | `bytedance/seedream-4` | $0.030 | up to 10 |
+| `kontext` | `black-forest-labs/flux-kontext-max` | $0.080 | **1 only** |
 | `kontext-pro` | `black-forest-labs/flux-kontext-pro` | $0.040 | 1 only |
 | `nanopro` | `google/nano-banana-pro` | $0.150 (1K) | up to 14 |
 | `gpt15` | `openai/gpt-image-1.5` | $0.050 (medium) | up to 10 |
 
 `*` = the default sweep. They are chosen to fail differently: `nano2` holds a likeness,
-`gpt2` follows instructions, `seedream` is cheap and stylises hard, `kontext` comes from a
-different aesthetic lineage entirely. `mwk-og models` prints the current list.
+`gpt2` follows instructions, `seedream45` reads a scene's spatial layout best, `flux2` comes
+from a different aesthetic lineage entirely. `mwk-og models` prints the current list.
 
-`gpt2` is the slow one — measured at 35–64s an image against 10–14s for the other three, so
-it sets the wall-clock of any sweep it is in. It is also the only one that renders legible
-text. Drop it with `-m nano2,seedream,kontext` when you want a fast look around.
+**FLUX 2 is billed by the megapixel**, not per image: $0.015 per run, per output MP *and per
+input MP*. Three 0.8 MP reference photos add ~$0.035 to every render, which is most of its
+cost. The tool measures your actual reference files and prices accordingly rather than
+assuming — so the number `--dry-run` shows is the real one.
+
+Checked 2026-08-13: there is no gpt-image-3, nano-banana-3, seedream-5 or flux-kontext-2 on
+Replicate. `flux-2-flex` exists at $0.060 and is deliberately excluded — its
+`prompt_upsampling` defaults to **true**, so it would rewrite prompts the way Seedream 4 did.
+
+`gpt2` is the slow one — measured at 35–68s an image against 10–27s for the others, so it
+sets the wall-clock of any sweep it is in. It is also the only one that renders legible text.
+Drop it with `-m nano2,seedream45,flux2` when you want a fast look around.
 
 Prices were read off each model's Replicate page on 2026-08-13. Replicate is the source of
 truth; treat the table as an estimate.

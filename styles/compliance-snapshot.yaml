@@ -1,0 +1,19 @@
+name: Compliance Snapshot
+description: For dry professional observations presented with the quiet
+  absurdity of an internal workplace photo.
+look: "Naturalistic documentary photography with slightly imperfect overhead
+  office lighting, cool gray walls, muted navy, beige, and printer-white tones.
+  Frame it like a candid corporate training still on a 35mm lens: mildly wide,
+  observational, with believable clutter and soft digital-camera grain. The mood
+  is restrained, procedural, and subtly comic."
+subject: Render the person as an unglamorous real professional caught mid-task,
+  with credible posture, wardrobe, and small facial reactions. Avoid polished
+  headshot posing; their expression should carry the joke through a tiny look of
+  concern, suspicion, or resignation.
+avoid: cinematic grading, glamour lighting, exaggerated comedy, futuristic interfaces
+refs: []
+tags:
+  - photo
+  - office
+  - deadpan
+origin: openai/gpt-5.6-terra

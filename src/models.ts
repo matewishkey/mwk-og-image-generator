@@ -9,6 +9,14 @@
 
 export const PRICES_VERIFIED_ON = '2026-08-13';
 
+/**
+ * Checked on PRICES_VERIFIED_ON: there is no gpt-image-3, no nano-banana-3, no seedream-5
+ * and no flux-kontext-2 on Replicate. The newest in each family are the ones listed below.
+ * `black-forest-labs/flux-2-flex` also exists ($0.06) and is deliberately left out — it is
+ * the knob-heavy variant, and its `prompt_upsampling` defaults to TRUE, so it would need
+ * the same pinning treatment as seedream-4 before it could join a comparison.
+ */
+
 /** How a model wants its reference images. */
 export type RefStyle = 'array' | 'single' | 'none';
 
@@ -37,6 +45,11 @@ export interface ModelSpec {
   priceUsd: Record<string, number>;
   /** True when the model accepts a `seed` — most do not. */
   seedable: boolean;
+  /**
+   * USD per megapixel of *reference* image, for models billed by the pixel rather than
+   * per image. Undefined means the per-image price already covers references.
+   */
+  perInputMpUsd?: number;
   notes: string;
   buildInput(o: BuildInputOpts): Record<string, unknown>;
 }
@@ -180,6 +193,53 @@ export const MODELS: ModelSpec[] = [
     }),
   },
   {
+    id: 'black-forest-labs/flux-2-pro',
+    alias: 'flux2',
+    label: 'FLUX 2 [pro]',
+    refStyle: 'array',
+    refField: 'input_images',
+    maxRefs: 10,
+    // Billed per megapixel: $0.015 per run + $0.015 per output MP. The tier IS the
+    // output resolution, so the price below is run + output for that size.
+    tiers: ['1 MP', '2 MP', '4 MP'],
+    priceUsd: { '1 MP': 0.03, '2 MP': 0.045, '4 MP': 0.075 },
+    perInputMpUsd: 0.015,
+    seedable: true,
+    notes:
+      'Successor to Kontext: takes MANY references where Kontext took one, and is seedable. ' +
+      'Billed per megapixel, so references are not free.',
+    buildInput: ({ prompt, refs, tier, seed }) => ({
+      prompt,
+      input_images: refs,
+      aspect_ratio: '16:9',
+      resolution: tier ?? '1 MP',
+      output_format: 'png',
+      ...(seed !== undefined ? { seed } : {}),
+    }),
+  },
+  {
+    id: 'bytedance/seedream-4.5',
+    alias: 'seedream45',
+    label: 'Seedream 4.5',
+    refStyle: 'array',
+    refField: 'image_input',
+    maxRefs: 10,
+    tiers: ['2K', '4K'],
+    priceUsd: { '2K': 0.04, '4K': 0.04 },
+    seedable: false,
+    // Note it dropped `enhance_prompt` entirely — the knob that silently rewrote prompts
+    // on seedream-4 does not exist here, so 4.5 always renders what you sent.
+    notes: 'Stronger spatial understanding and world knowledge than 4, and it no longer rewrites the prompt.',
+    buildInput: ({ prompt, refs, tier }) => ({
+      prompt,
+      image_input: refs,
+      size: tier ?? '2K',
+      aspect_ratio: '16:9',
+      sequential_image_generation: 'disabled',
+      max_images: 1,
+    }),
+  },
+  {
     id: 'google/nano-banana-pro',
     alias: 'nanopro',
     label: 'Nano Banana Pro',
@@ -225,7 +285,7 @@ export const MODELS: ModelSpec[] = [
 ];
 
 /** The default sweep: four models with genuinely different failure modes. */
-export const DEFAULT_SWEEP = ['nano2', 'gpt2', 'seedream', 'kontext'];
+export const DEFAULT_SWEEP = ['nano2', 'gpt2', 'seedream45', 'flux2'];
 
 export function resolveModel(nameOrAlias: string): ModelSpec {
   const key = nameOrAlias.trim().toLowerCase();
@@ -237,7 +297,15 @@ export function resolveModel(nameOrAlias: string): ModelSpec {
   return hit;
 }
 
-export function priceOf(model: ModelSpec, tier?: string): number {
+/**
+ * Price of one render.
+ *
+ * `refMp` is the total megapixels of the reference images attached to the cell. Most
+ * models bill a flat per-image price and ignore it; the FLUX 2 family bills per megapixel
+ * in *and* out, so three 0.8 MP references more than double its cost. Passing the real
+ * measured value (see run.ts) rather than assuming keeps the estimate honest.
+ */
+export function priceOf(model: ModelSpec, tier?: string, refMp = 0): number {
   const key = tier ?? model.tiers[0];
   const usd = model.priceUsd[key];
   if (usd === undefined) {
@@ -245,5 +313,5 @@ export function priceOf(model: ModelSpec, tier?: string): number {
       `Model ${model.alias} has no price for tier "${key}". Known tiers: ${model.tiers.join(', ')}`,
     );
   }
-  return usd;
+  return usd + (model.perInputMpUsd ?? 0) * refMp;
 }

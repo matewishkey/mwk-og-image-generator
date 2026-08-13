@@ -1,0 +1,18 @@
+name: Clay Desk Theater
+description: For wry workplace commentary turned into a tactile miniature visual metaphor.
+look: Handmade stop-motion clay and foam-board miniature construction, lit with
+  a warm tabletop key light and soft, oversized shadows. Use dusty primary
+  accents against oatmeal, charcoal, and muted teal surfaces, with visible
+  fingerprints, seams, and slightly wonky handcrafted geometry. Compose in an
+  elevated three-quarter view like a tiny diorama photographed on a macro lens.
+subject: Render the person as a small sculpted clay figure with recognizable
+  adult proportions, simple features, and expressive body language. Keep them
+  plausibly human rather than toy-cute, using a restrained eyebrow, hunched
+  shoulder, or hovering hand to suggest discomfort.
+avoid: plastic toy sheen, Pixar polish, photoreal faces, candy colors
+refs: []
+tags:
+  - clay
+  - miniature
+  - tactile
+origin: openai/gpt-5.6-terra
