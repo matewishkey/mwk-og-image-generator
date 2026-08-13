@@ -64,6 +64,7 @@ montage
                            art/ frames, not the og/ cards, or every panel carries its
                            own band
       --label <text>       caption for each panel; repeat, one per image
+      --label-prefix <t>   prepended to every label, e.g. "Vibe coding"
       --title <text>       headline for the band; *asterisks* set a word in red
       --kicker <text>      small red line above the title
       --tagline <text>     standfirst under the title
@@ -289,6 +290,7 @@ async function cmdMontage(argv: string[]): Promise<void> {
     allowPositionals: true,
     options: {
       label: { type: 'string', multiple: true },
+      'label-prefix': { type: 'string' },
       title: { type: 'string' },
       kicker: { type: 'string' },
       tagline: { type: 'string' },
@@ -304,6 +306,7 @@ async function cmdMontage(argv: string[]): Promise<void> {
   const out = await montage({
     images: await Promise.all(positionals.map((p) => readFile(p))),
     labels: values.label ?? [],
+    labelPrefix: values['label-prefix'],
     brand,
     title: values.title,
     kicker: values.kicker,

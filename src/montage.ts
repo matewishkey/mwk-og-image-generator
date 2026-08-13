@@ -19,6 +19,13 @@ export interface MontageOpts {
   images: Buffer[];
   /** One per image; blank entries simply render no chip. */
   labels?: string[];
+  /**
+   * Prepended to every label, e.g. "Vibe coding" -> "VIBE CODING: AT HOME".
+   *
+   * Worth having as its own option rather than typing it into each label: the series name
+   * is one fact, and repeating it four times is four chances to typo it.
+   */
+  labelPrefix?: string;
   brand: BrandConfig;
   title?: string;
   kicker?: string;
@@ -62,6 +69,7 @@ export async function montage(opts: MontageOpts): Promise<Buffer> {
   const {
     images,
     labels = [],
+    labelPrefix,
     brand,
     title,
     kicker,
@@ -103,7 +111,8 @@ export async function montage(opts: MontageOpts): Promise<Buffer> {
 
     const label = labels[i]?.trim();
     if (label) {
-      layers.push({ input: await labelChip(brand, label), top: top + 14, left: left + 14 });
+      const full = labelPrefix?.trim() ? `${labelPrefix.trim()}: ${label}` : label;
+      layers.push({ input: await labelChip(brand, full), top: top + 14, left: left + 14 });
     }
   }
 
