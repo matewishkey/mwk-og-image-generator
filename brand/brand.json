@@ -1,0 +1,17 @@
+{
+  "$comment": "Mate Wish Key OG card. Palette lifted from mwk-replayer's tokens so the cards match the site.",
+  "canvas": { "width": 1200, "height": 630 },
+  "colors": {
+    "ground": "#0d1014",
+    "accent": "#e2342b",
+    "accentSoft": "#f0524a",
+    "ink": "#f4f2f6",
+    "mute": "#a8a2b0"
+  },
+  "scrim": { "startY": 300, "opacity": 0.96 },
+  "band": { "height": 138, "opacity": 0.94, "ruleHeight": 3 },
+  "logo": { "file": "brand/mwk-mark-white.svg", "height": 46, "x": 56 },
+  "title": { "size": 38, "weight": 800, "gap": 30, "maxLines": 2 },
+  "kicker": { "size": 15, "weight": 700, "tracking": 2600 },
+  "font": { "family": "Manrope", "file": "brand/fonts/Manrope[wght].ttf" }
+}

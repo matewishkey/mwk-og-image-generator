@@ -1,0 +1,27 @@
+{
+  "name": "mwk-og-image-generator",
+  "version": "0.1.0",
+  "description": "Generate branded OG images from a style + a prompt, across several AI models at once.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "replicate": "^1.4.0",
+    "sharp": "^0.35.3",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  },
+  "bin": {
+    "mwk-og": "src/cli.ts"
+  }
+}

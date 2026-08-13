@@ -1,0 +1,15 @@
+name: Cinematic Portrait
+description: Moody photographic close-up. The default when a real face has to carry the card.
+look: >-
+  Photographic, shot on a full-frame camera with an 85mm lens at f/1.8, shallow depth of
+  field. Single hard key light from one side with deep falloff into near-black shadow, a
+  cold rim light on the opposite edge. Desaturated palette with one warm accent — amber
+  or ember red — against charcoal and dark teal. Fine film grain, subtle halation on the
+  highlights. Composed off-centre with generous negative space.
+subject: >-
+  Rendered as a real photograph of them, not a stylisation. Keep the face sharp and
+  well-lit, expression readable, no cosmetic smoothing.
+avoid: >-
+  flat even lighting, stock-photo smiling, cluttered background, HDR look, plastic skin
+tags: [photographic, dramatic, portrait]
+origin: hand

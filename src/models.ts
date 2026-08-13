@@ -1,0 +1,215 @@
+/**
+ * Model registry.
+ *
+ * Every slug, input field and price here was read off the model's own Replicate
+ * page (`/api/schema` for the fields, the page's pricing block for the money) on
+ * PRICES_VERIFIED_ON. Replicate is the source of truth — `mwk-og models --check`
+ * re-reads the live pages and tells you what drifted. Never edit a price from memory.
+ */
+
+export const PRICES_VERIFIED_ON = '2026-08-13';
+
+/** How a model wants its reference images. */
+export type RefStyle = 'array' | 'single' | 'none';
+
+export interface BuildInputOpts {
+  prompt: string;
+  /** Public URLs or data URIs for reference images, already resolved. */
+  refs: string[];
+  /** Requested quality/resolution knob, model-specific. Falls back to the default. */
+  tier?: string;
+  seed?: number;
+}
+
+export interface ModelSpec {
+  /** Replicate `owner/name`. */
+  id: string;
+  /** Short name used on the CLI. */
+  alias: string;
+  label: string;
+  /** Field the model reads reference images from. */
+  refStyle: RefStyle;
+  refField?: string;
+  maxRefs: number;
+  /** Tier keys accepted by `--tier`, first one is the default. */
+  tiers: string[];
+  /** USD per output image, keyed by tier. */
+  priceUsd: Record<string, number>;
+  /** True when the model accepts a `seed` — most do not. */
+  seedable: boolean;
+  notes: string;
+  buildInput(o: BuildInputOpts): Record<string, unknown>;
+}
+
+/**
+ * OG images are 1200x630 (1.905:1). No model offers that ratio, so we ask for the
+ * widest one it does have and cover-crop in the brand step. 16:9 loses ~7% of the
+ * height; 3:2 loses ~21%. Prefer 16:9 wherever the enum allows it.
+ */
+export const OG_WIDTH = 1200;
+export const OG_HEIGHT = 630;
+
+export const MODELS: ModelSpec[] = [
+  {
+    id: 'google/nano-banana-2',
+    alias: 'nano2',
+    label: 'Nano Banana 2 (Gemini 3.1 Flash Image)',
+    refStyle: 'array',
+    refField: 'image_input',
+    maxRefs: 14,
+    tiers: ['1K', '2K', '4K'],
+    priceUsd: { '1K': 0.067, '2K': 0.101, '4K': 0.151 },
+    seedable: false,
+    notes: 'Best at keeping a real face recognisable across styles. Takes up to 14 references.',
+    buildInput: ({ prompt, refs, tier }) => ({
+      prompt,
+      image_input: refs,
+      aspect_ratio: '16:9',
+      resolution: tier ?? '1K',
+      output_format: 'png',
+    }),
+  },
+  {
+    id: 'openai/gpt-image-2',
+    alias: 'gpt2',
+    label: 'GPT Image 2',
+    refStyle: 'array',
+    refField: 'input_images',
+    maxRefs: 10,
+    tiers: ['medium', 'low', 'high'],
+    priceUsd: { low: 0.012, medium: 0.047, high: 0.128, auto: 0.128 },
+    seedable: false,
+    notes: 'Strongest instruction-following and the only one that reliably renders legible text.',
+    buildInput: ({ prompt, refs, tier }) => ({
+      prompt,
+      input_images: refs,
+      aspect_ratio: '16:9',
+      quality: tier ?? 'medium',
+      number_of_images: 1,
+      output_format: 'png',
+    }),
+  },
+  {
+    id: 'bytedance/seedream-4',
+    alias: 'seedream',
+    label: 'Seedream 4',
+    refStyle: 'array',
+    refField: 'image_input',
+    maxRefs: 10,
+    tiers: ['2K', '1K', '4K'],
+    // Seedream is a flat per-image price regardless of size.
+    priceUsd: { '1K': 0.03, '2K': 0.03, '4K': 0.03 },
+    seedable: false,
+    notes: 'Cheapest of the set and fast. Strong stylisation, looser on likeness.',
+    buildInput: ({ prompt, refs, tier }) => ({
+      prompt,
+      image_input: refs,
+      size: tier ?? '2K',
+      aspect_ratio: '16:9',
+      sequential_image_generation: 'disabled',
+      max_images: 1,
+    }),
+  },
+  {
+    id: 'black-forest-labs/flux-kontext-max',
+    alias: 'kontext',
+    label: 'FLUX.1 Kontext [max]',
+    refStyle: 'single',
+    refField: 'input_image',
+    maxRefs: 1,
+    tiers: ['default'],
+    priceUsd: { default: 0.08 },
+    seedable: true,
+    notes: 'Different aesthetic family to the others, best typography. Only takes ONE reference.',
+    buildInput: ({ prompt, refs, seed }) => ({
+      prompt,
+      ...(refs[0] ? { input_image: refs[0] } : {}),
+      aspect_ratio: '16:9',
+      output_format: 'png',
+      ...(seed !== undefined ? { seed } : {}),
+    }),
+  },
+  {
+    id: 'black-forest-labs/flux-kontext-pro',
+    alias: 'kontext-pro',
+    label: 'FLUX.1 Kontext [pro]',
+    refStyle: 'single',
+    refField: 'input_image',
+    maxRefs: 1,
+    tiers: ['default'],
+    priceUsd: { default: 0.04 },
+    seedable: true,
+    notes: 'Half the price of [max], noticeably weaker on typography.',
+    buildInput: ({ prompt, refs, seed }) => ({
+      prompt,
+      ...(refs[0] ? { input_image: refs[0] } : {}),
+      aspect_ratio: '16:9',
+      output_format: 'png',
+      ...(seed !== undefined ? { seed } : {}),
+    }),
+  },
+  {
+    id: 'google/nano-banana-pro',
+    alias: 'nanopro',
+    label: 'Nano Banana Pro',
+    refStyle: 'array',
+    refField: 'image_input',
+    maxRefs: 14,
+    tiers: ['1K', '2K', '4K'],
+    priceUsd: { '1K': 0.15, '2K': 0.15, '4K': 0.3 },
+    seedable: false,
+    notes: 'The premium Google tier. Reach for it once a style is chosen, not while exploring.',
+    buildInput: ({ prompt, refs, tier }) => ({
+      prompt,
+      image_input: refs,
+      aspect_ratio: '16:9',
+      resolution: tier ?? '1K',
+      output_format: 'png',
+    }),
+  },
+  {
+    id: 'openai/gpt-image-1.5',
+    alias: 'gpt15',
+    label: 'GPT Image 1.5',
+    refStyle: 'array',
+    refField: 'input_images',
+    maxRefs: 10,
+    tiers: ['medium', 'low', 'high'],
+    priceUsd: { low: 0.013, medium: 0.05, high: 0.136, auto: 0.136 },
+    seedable: false,
+    // Its aspect_ratio enum is only 1:1 / 3:2 / 2:3 — no 16:9 — so it crops harder.
+    notes: 'Superseded by GPT Image 2. Kept because 3:2 is its widest ratio, which some crops suit.',
+    buildInput: ({ prompt, refs, tier }) => ({
+      prompt,
+      input_images: refs,
+      aspect_ratio: '3:2',
+      quality: tier ?? 'medium',
+      number_of_images: 1,
+      output_format: 'png',
+    }),
+  },
+];
+
+/** The default sweep: four models with genuinely different failure modes. */
+export const DEFAULT_SWEEP = ['nano2', 'gpt2', 'seedream', 'kontext'];
+
+export function resolveModel(nameOrAlias: string): ModelSpec {
+  const key = nameOrAlias.trim().toLowerCase();
+  const hit = MODELS.find((m) => m.alias === key || m.id.toLowerCase() === key);
+  if (!hit) {
+    const known = MODELS.map((m) => m.alias).join(', ');
+    throw new Error(`Unknown model "${nameOrAlias}". Known aliases: ${known}`);
+  }
+  return hit;
+}
+
+export function priceOf(model: ModelSpec, tier?: string): number {
+  const key = tier ?? model.tiers[0];
+  const usd = model.priceUsd[key];
+  if (usd === undefined) {
+    throw new Error(
+      `Model ${model.alias} has no price for tier "${key}". Known tiers: ${model.tiers.join(', ')}`,
+    );
+  }
+  return usd;
+}
