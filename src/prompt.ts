@@ -14,11 +14,28 @@ import { slugify } from './style.ts';
  * prompt tells the model two things it would otherwise get wrong: don't render text, and
  * keep the bottom of the frame calm so the band has somewhere quiet to sit.
  */
-const FRAME_RULES = [
+const FRAME_BASE = [
   'Wide 16:9 landscape composition, framed for a social share card.',
   'Keep the bottom fifth of the frame visually calm and uncluttered — no important detail there.',
-  'Render NO text, NO letters, NO numbers, NO logos, NO watermarks, NO captions anywhere in the image.',
 ].join(' ');
+
+/** Default: the band is the only text, so the picture must carry none. */
+const NO_TEXT =
+  'Render NO text, NO letters, NO numbers, NO logos, NO watermarks, NO captions anywhere in the image.';
+
+/**
+ * With --allow-text: text in the picture is wanted, but the brand band still is not, and
+ * a model asked for "text" will happily invent a logo if not told otherwise.
+ */
+const SOME_TEXT = [
+  'Any text in the image must be short, correctly spelled English and genuinely legible.',
+  'Speech bubbles and on-screen captions are welcome where they carry the joke.',
+  'Still render NO logos, NO watermarks and NO brand marks of any kind.',
+].join(' ');
+
+function frameRules(allowText: boolean): string {
+  return `${FRAME_BASE} ${allowText ? SOME_TEXT : NO_TEXT}`;
+}
 
 export interface ComposeOpts {
   style: Style;
@@ -36,11 +53,19 @@ export interface ComposeOpts {
    * plainly that everyone else is someone else, fixed it.
    */
   refRole?: string;
+  /**
+   * Let the model draw text inside the picture — speech bubbles, captions, signage.
+   *
+   * Off by default because only GPT Image 2 spells reliably and the brand band already
+   * carries the words. Worth turning on for cartoon/comic styles where the bubble IS the
+   * gag, and worth checking the spelling on every result when you do.
+   */
+  allowText?: boolean;
   /** Extra free-text appended verbatim, for one-off nudges. */
   extra?: string;
 }
 
-export function compose({ style, idea, hasRefs, refRole, extra }: ComposeOpts): string {
+export function compose({ style, idea, hasRefs, refRole, allowText, extra }: ComposeOpts): string {
   const parts: string[] = [];
 
   parts.push(idea.trim());
@@ -65,7 +90,7 @@ export function compose({ style, idea, hasRefs, refRole, extra }: ComposeOpts): 
     parts.push('Use the person in the reference image(s) as the subject, clearly recognisable.');
   }
 
-  parts.push(FRAME_RULES);
+  parts.push(frameRules(allowText ?? false));
 
   if (style.avoid.trim()) parts.push(`Avoid: ${style.avoid.trim()}`);
   if (extra?.trim()) parts.push(extra.trim());

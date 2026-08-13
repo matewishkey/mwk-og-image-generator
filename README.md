@@ -99,8 +99,16 @@ Replicate. `flux-2-flex` exists at $0.060 and is deliberately excluded — its
 `prompt_upsampling` defaults to **true**, so it would rewrite prompts the way Seedream 4 did.
 
 `gpt2` is the slow one — measured at 35–68s an image against 10–27s for the others, so it
-sets the wall-clock of any sweep it is in. It is also the only one that renders legible text.
-Drop it with `-m nano2,seedream45,flux2` when you want a fast look around.
+sets the wall-clock of any sweep it is in. Drop it with `-m nano2,seedream45,flux2` when you
+want a fast look around.
+
+**What GPT Image 2 is actually better at.** Not spelling — given the same two-panel comic
+prompt with `--allow-text`, Nano Banana 2 spelled its speech bubbles perfectly too. The
+difference is *compositional* instruction-following: the prompt asked for the candidate
+glancing at a second screen off to the side, and only `gpt2` drew that screen, populated it
+with the four metrics, and pointed the candidate's eyes at it — the detail the whole joke
+rests on. Nano Banana drew two people talking. `gpt2` also spends roughly five times the
+wall-clock per image, which is the trade you are making.
 
 Prices were read off each model's Replicate page on 2026-08-13. Replicate is the source of
 truth; treat the table as an estimate.
@@ -152,11 +160,30 @@ out/2026-08-13_honey-trap-questions/
 └── art/             the unbranded renders
 ```
 
+## Video
+
+Same grid, same styles, same brand band — the band is burned into every frame with ffmpeg
+from the identical overlay the stills use, so a card and its animation cannot drift apart.
+Each video cell also yields a poster frame branded as an ordinary OG card.
+
+| alias | model | price | audio | clip lengths |
+|---|---|---|---|---|
+| `sora2` | `openai/sora-2` | $0.10/sec | **yes** | 4, 8, 12s |
+| `veo31` | `google/veo-3.1` | $0.40/sec with audio, $0.20 without | **yes** | 4, 6, 8s |
+| `kling25` | `kwaivgi/kling-v2.5-turbo-pro` | $0.07/sec | no | 5, 10s |
+| `seedance` | `bytedance/seedance-1-pro` | $0.06/sec @720p | no | 5, 10s |
+
+Only Sora and Veo return synced dialogue, so those two are the only options when the clip
+has to say something. Sora is four times cheaper per second than Veo with audio on. Note
+Veo's price tier is **audio on/off, not resolution** — 1080p costs the same as 720p.
+
+Feed a still you already like in as the first frame: `--ref out/<run>/art/<card>.png`.
+`--seconds` picks the clip length; each model has its own permitted set and falls back to
+its default rather than erroring.
+
 ## Coming later
 
-Video is the same shape — a style, a prompt, a model that happens to return frames — and
-Replicate hosts `openai/sora-2` at $0.10/second. The model registry has room for it. The
-web UI is phase 2.
+The web UI is phase 2. `src/` is already the library it would call.
 
 ## Licence
 

@@ -158,31 +158,76 @@ function furnitureSvg(b: BrandConfig): Buffer {
 </svg>`);
 }
 
-/** Compose artwork + brand furniture into the finished OG card. */
-export async function applyBrand({ art, title, kicker, brand }: BrandOpts): Promise<Buffer> {
-  const { width: W, height: H } = brand.canvas;
-  const bandY = H - brand.band.height;
+/**
+ * Scale the whole brand config by a factor.
+ *
+ * The layout is authored at 1200x630. A video frame is 1280x720 or larger, and a band
+ * sized for 1200px would sit visibly small on it — so geometry scales with width while
+ * the colours and fonts stay put.
+ */
+function scaleBrand(b: BrandConfig, width: number, height: number): BrandConfig {
+  const k = width / b.canvas.width;
+  const r = (n: number) => Math.round(n * k);
+  return {
+    ...b,
+    canvas: { width, height },
+    scrim: { ...b.scrim, startY: Math.round(height - (b.canvas.height - b.scrim.startY) * k) },
+    band: { ...b.band, height: r(b.band.height), ruleHeight: Math.max(1, r(b.band.ruleHeight)) },
+    logo: { ...b.logo, size: r(b.logo.size), x: r(b.logo.x) },
+    title: { ...b.title, size: r(b.title.size), gap: r(b.title.gap) },
+    kicker: { ...b.kicker, size: r(b.kicker.size), gapBelow: r(b.kicker.gapBelow) },
+  };
+}
 
-  // `attention` crops toward the salient region rather than the centre, which keeps a
-  // face in frame when a 16:9 render is squeezed into the wider OG ratio.
-  const base = await sharp(art)
-    .resize(W, H, { fit: 'cover', position: sharp.strategy.attention })
+/**
+ * The brand furniture alone, on transparency, at any size.
+ *
+ * Exists so the identical band can be composited onto a still by sharp and burned into a
+ * video by ffmpeg — one implementation, so a card and its animation cannot drift apart.
+ */
+export async function brandOverlay(
+  brand: BrandConfig,
+  width: number,
+  height: number,
+  text: { title?: string; kicker?: string },
+): Promise<Buffer> {
+  const b = width === brand.canvas.width && height === brand.canvas.height
+    ? brand
+    : scaleBrand(brand, width, height);
+  const bandY = height - b.band.height;
+
+  const layers: OverlayOptions[] = [{ input: furnitureSvg(b), top: 0, left: 0 }];
+  layers.push(...(await bandContents(b, bandY, width, text)));
+
+  return sharp({
+    create: { width, height, channels: 4, background: '#00000000' },
+  })
+    .composite(layers)
+    .png()
     .toBuffer();
+}
 
-  const layers: OverlayOptions[] = [{ input: furnitureSvg(brand), top: 0, left: 0 }];
+/** The RedBlock plus the kicker/title stack, placed inside the band. */
+async function bandContents(
+  b: BrandConfig,
+  bandY: number,
+  width: number,
+  text: { title?: string; kicker?: string },
+): Promise<OverlayOptions[]> {
+  const layers: OverlayOptions[] = [];
 
-  const block = await redBlock(brand);
+  const block = await redBlock(b);
   layers.push({
     input: block,
-    top: bandY + Math.round((brand.band.height - brand.logo.size) / 2),
-    left: brand.logo.x,
+    top: bandY + Math.round((b.band.height - b.logo.size) / 2),
+    left: b.logo.x,
   });
 
-  const textLeft = brand.logo.x + brand.logo.size + brand.title.gap;
-  const textWidth = W - textLeft - brand.logo.x;
+  const textLeft = b.logo.x + b.logo.size + b.title.gap;
+  const textWidth = width - textLeft - b.logo.x;
 
-  const kickerText = kicker?.trim();
-  const titleText = title?.trim();
+  const kickerText = text.kicker?.trim();
+  const titleText = text.title?.trim();
 
   // The text block is centred in the band as a unit, so a card with a kicker and one
   // without both sit optically level against the RedBlock.
@@ -191,10 +236,10 @@ export async function applyBrand({ art, title, kicker, brand }: BrandOpts): Prom
   if (kickerText) {
     const k = await textLayer({
       text: kickerText.toUpperCase(),
-      font: brand.kicker,
-      color: brand.colors.redDeep,
+      font: b.kicker,
+      color: b.colors.redDeep,
       width: textWidth,
-      trackingEm: brand.kicker.trackingEm,
+      trackingEm: b.kicker.trackingEm,
     });
     rendered.push({ buf: k.buf, height: k.height, gapAbove: 0 });
   }
@@ -202,24 +247,34 @@ export async function applyBrand({ art, title, kicker, brand }: BrandOpts): Prom
   if (titleText) {
     const t = await textLayer({
       text: titleText,
-      font: brand.title,
-      color: brand.colors.ink,
+      font: b.title,
+      color: b.colors.ink,
       width: textWidth,
     });
-    rendered.push({
-      buf: t.buf,
-      height: t.height,
-      gapAbove: kickerText ? brand.kicker.gapBelow : 0,
-    });
+    rendered.push({ buf: t.buf, height: t.height, gapAbove: kickerText ? b.kicker.gapBelow : 0 });
   }
 
   const blockHeight = rendered.reduce((sum, r) => sum + r.height + r.gapAbove, 0);
-  let cursor = bandY + Math.round((brand.band.height - blockHeight) / 2);
+  let cursor = bandY + Math.round((b.band.height - blockHeight) / 2);
   for (const r of rendered) {
     cursor += r.gapAbove;
     layers.push({ input: r.buf, top: cursor, left: textLeft });
     cursor += r.height;
   }
 
-  return sharp(base).composite(layers).png().toBuffer();
+  return layers;
+}
+
+/** Compose artwork + brand furniture into the finished OG card. */
+export async function applyBrand({ art, title, kicker, brand }: BrandOpts): Promise<Buffer> {
+  const { width: W, height: H } = brand.canvas;
+
+  // `attention` crops toward the salient region rather than the centre, which keeps a
+  // face in frame when a 16:9 render is squeezed into the wider OG ratio.
+  const base = await sharp(art)
+    .resize(W, H, { fit: 'cover', position: sharp.strategy.attention })
+    .toBuffer();
+
+  const overlay = await brandOverlay(brand, W, H, { title, kicker });
+  return sharp(base).composite([{ input: overlay, top: 0, left: 0 }]).png().toBuffer();
 }

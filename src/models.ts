@@ -20,6 +20,17 @@ export const PRICES_VERIFIED_ON = '2026-08-13';
 /** How a model wants its reference images. */
 export type RefStyle = 'array' | 'single' | 'none';
 
+export type Modality = 'image' | 'video';
+
+/**
+ * What the tier price is charged against.
+ *
+ *   'image'  — per output image (most image models)
+ *   'second' — per second of output video (Sora, Veo, Kling, Seedance)
+ *   'video'  — flat per clip regardless of length (Hailuo)
+ */
+export type PriceUnit = 'image' | 'second' | 'video';
+
 export interface BuildInputOpts {
   prompt: string;
   /** Public URLs or data URIs for reference images, already resolved. */
@@ -27,11 +38,21 @@ export interface BuildInputOpts {
   /** Requested quality/resolution knob, model-specific. Falls back to the default. */
   tier?: string;
   seed?: number;
+  /** Clip length for video models. Ignored by image models. */
+  seconds?: number;
 }
 
 export interface ModelSpec {
   /** Replicate `owner/name`. */
   id: string;
+  /** Images or video. Video cells get a poster frame and a band burned into the footage. */
+  modality: Modality;
+  /** What priceUsd is charged against. Defaults to per image. */
+  priceUnit?: PriceUnit;
+  /** Clip lengths the model accepts, first is the default. Video only. */
+  durations?: number[];
+  /** True when the model returns synced audio — the only ones that can carry dialogue. */
+  audio?: boolean;
   /** Short name used on the CLI. */
   alias: string;
   label: string;
@@ -86,6 +107,7 @@ export const OG_HEIGHT = 630;
 export const MODELS: ModelSpec[] = [
   {
     id: 'google/nano-banana-2',
+    modality: 'image',
     alias: 'nano2',
     label: 'Nano Banana 2 (Gemini 3.1 Flash Image)',
     refStyle: 'array',
@@ -108,6 +130,7 @@ export const MODELS: ModelSpec[] = [
   },
   {
     id: 'openai/gpt-image-2',
+    modality: 'image',
     alias: 'gpt2',
     label: 'GPT Image 2',
     refStyle: 'array',
@@ -128,6 +151,7 @@ export const MODELS: ModelSpec[] = [
   },
   {
     id: 'bytedance/seedream-4',
+    modality: 'image',
     alias: 'seedream',
     label: 'Seedream 4',
     refStyle: 'array',
@@ -152,6 +176,7 @@ export const MODELS: ModelSpec[] = [
   },
   {
     id: 'black-forest-labs/flux-kontext-max',
+    modality: 'image',
     alias: 'kontext',
     label: 'FLUX.1 Kontext [max]',
     refStyle: 'single',
@@ -173,6 +198,7 @@ export const MODELS: ModelSpec[] = [
   },
   {
     id: 'black-forest-labs/flux-kontext-pro',
+    modality: 'image',
     alias: 'kontext-pro',
     label: 'FLUX.1 Kontext [pro]',
     refStyle: 'single',
@@ -194,6 +220,7 @@ export const MODELS: ModelSpec[] = [
   },
   {
     id: 'black-forest-labs/flux-2-pro',
+    modality: 'image',
     alias: 'flux2',
     label: 'FLUX 2 [pro]',
     refStyle: 'array',
@@ -219,6 +246,7 @@ export const MODELS: ModelSpec[] = [
   },
   {
     id: 'bytedance/seedream-4.5',
+    modality: 'image',
     alias: 'seedream45',
     label: 'Seedream 4.5',
     refStyle: 'array',
@@ -241,6 +269,7 @@ export const MODELS: ModelSpec[] = [
   },
   {
     id: 'google/nano-banana-pro',
+    modality: 'image',
     alias: 'nanopro',
     label: 'Nano Banana Pro',
     refStyle: 'array',
@@ -263,6 +292,7 @@ export const MODELS: ModelSpec[] = [
   },
   {
     id: 'openai/gpt-image-1.5',
+    modality: 'image',
     alias: 'gpt15',
     label: 'GPT Image 1.5',
     refStyle: 'array',
@@ -280,6 +310,104 @@ export const MODELS: ModelSpec[] = [
       quality: tier ?? 'medium',
       number_of_images: 1,
       output_format: 'png',
+    }),
+  },
+
+  // ── video ──────────────────────────────────────────────────────────────────
+  {
+    id: 'openai/sora-2',
+    modality: 'video',
+    alias: 'sora2',
+    label: 'Sora 2',
+    refStyle: 'single',
+    refField: 'input_reference',
+    maxRefs: 1,
+    tiers: ['sora-2'],
+    priceUsd: { 'sora-2': 0.1 },
+    priceUnit: 'second',
+    durations: [12, 8, 4],
+    audio: true,
+    seedable: false,
+    notes: 'Synced dialogue audio, and the cheapest way to get it. Takes one reference image.',
+    // Its aspect enum is `portrait`/`landscape`, NOT a ratio string like the others.
+    buildInput: ({ prompt, refs, seconds }) => ({
+      prompt,
+      ...(refs[0] ? { input_reference: refs[0] } : {}),
+      seconds: seconds ?? 12,
+      aspect_ratio: 'landscape',
+    }),
+  },
+  {
+    id: 'google/veo-3.1',
+    modality: 'video',
+    alias: 'veo31',
+    label: 'Veo 3.1',
+    refStyle: 'array',
+    refField: 'reference_images',
+    maxRefs: 3,
+    // The tier is audio on/off, NOT resolution — 1080p costs the same as 720p.
+    tiers: ['with_audio', 'without_audio'],
+    priceUsd: { with_audio: 0.4, without_audio: 0.2 },
+    priceUnit: 'second',
+    durations: [8, 6, 4],
+    audio: true,
+    seedable: true,
+    notes: 'Best motion and it takes several references, but 4x Sora per second with audio on.',
+    buildInput: ({ prompt, refs, tier, seconds, seed }) => ({
+      prompt,
+      ...(refs[0] ? { image: refs[0] } : {}),
+      duration: seconds ?? 8,
+      aspect_ratio: '16:9',
+      resolution: '1080p',
+      generate_audio: tier !== 'without_audio',
+      ...(seed !== undefined ? { seed } : {}),
+    }),
+  },
+  {
+    id: 'kwaivgi/kling-v2.5-turbo-pro',
+    modality: 'video',
+    alias: 'kling25',
+    label: 'Kling v2.5 Turbo Pro',
+    refStyle: 'single',
+    refField: 'start_image',
+    maxRefs: 1,
+    tiers: ['default'],
+    priceUsd: { default: 0.07 },
+    priceUnit: 'second',
+    durations: [10, 5],
+    audio: false,
+    seedable: false,
+    notes: 'Silent, but the cheapest good motion — a 10s clip costs less than 2s of Veo.',
+    buildInput: ({ prompt, refs, seconds }) => ({
+      prompt,
+      ...(refs[0] ? { start_image: refs[0] } : {}),
+      duration: seconds ?? 10,
+      aspect_ratio: '16:9',
+    }),
+  },
+  {
+    id: 'bytedance/seedance-1-pro',
+    modality: 'video',
+    alias: 'seedance',
+    label: 'Seedance 1 Pro',
+    refStyle: 'single',
+    refField: 'image',
+    maxRefs: 1,
+    tiers: ['720p', '480p', '1080p'],
+    priceUsd: { '480p': 0.03, '720p': 0.06, '1080p': 0.15 },
+    priceUnit: 'second',
+    durations: [5, 10],
+    audio: false,
+    seedable: true,
+    notes: 'Silent and cheapest of all at 480p. Good for blocking a shot before paying for audio.',
+    buildInput: ({ prompt, refs, tier, seconds, seed }) => ({
+      prompt,
+      ...(refs[0] ? { image: refs[0] } : {}),
+      duration: seconds ?? 5,
+      resolution: tier ?? '720p',
+      aspect_ratio: '16:9',
+      fps: 24,
+      ...(seed !== undefined ? { seed } : {}),
     }),
   },
 ];
@@ -305,7 +433,7 @@ export function resolveModel(nameOrAlias: string): ModelSpec {
  * in *and* out, so three 0.8 MP references more than double its cost. Passing the real
  * measured value (see run.ts) rather than assuming keeps the estimate honest.
  */
-export function priceOf(model: ModelSpec, tier?: string, refMp = 0): number {
+export function priceOf(model: ModelSpec, tier?: string, refMp = 0, seconds?: number): number {
   const key = tier ?? model.tiers[0];
   const usd = model.priceUsd[key];
   if (usd === undefined) {
@@ -313,5 +441,15 @@ export function priceOf(model: ModelSpec, tier?: string, refMp = 0): number {
       `Model ${model.alias} has no price for tier "${key}". Known tiers: ${model.tiers.join(', ')}`,
     );
   }
-  return usd + (model.perInputMpUsd ?? 0) * refMp;
+  const units = model.priceUnit === 'second' ? (seconds ?? model.durations?.[0] ?? 1) : 1;
+  return usd * units + (model.perInputMpUsd ?? 0) * refMp;
 }
+
+/** A clip length the model actually offers, or its default. */
+export function pickSeconds(model: ModelSpec, requested?: number): number | undefined {
+  if (!model.durations?.length) return undefined;
+  if (requested && model.durations.includes(requested)) return requested;
+  return model.durations[0];
+}
+
+export const VIDEO_SWEEP = ['sora2', 'veo31', 'kling25'];

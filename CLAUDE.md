@@ -110,3 +110,30 @@ as the candidate. Nothing errored; the picture just argued the opposite case.
 
 `--ref-role` emits an explicit assignment plus "everyone else is a different individual".
 Any scene with more than one person needs it. See `ComposeOpts.refRole`.
+
+## Video is the same pipeline, not a second one
+
+`src/video.ts` burns the band in with ffmpeg using the **same** `brandOverlay()` the stills
+use, scaled by `scaleBrand()` to the clip's real dimensions. Never write a second band
+renderer for video — one implementation is the only thing stopping a card and its animation
+from drifting apart. ffprobe is not installed on this box; dimensions come from extracting
+frame 1 and reading it with sharp, which is deliberate, not a workaround to replace.
+
+Facts that cost money if guessed:
+
+- **Veo 3.1's price tier is audio on/off, not resolution** — $0.40/sec with, $0.20 without,
+  and 1080p costs the same as 720p.
+- **Only Sora 2 and Veo 3.1 return audio.** Kling and Seedance are silent, so a clip with
+  dialogue has exactly two candidates, and Sora is 4x cheaper per second.
+- Sora's aspect enum is `portrait`/`landscape`, not a ratio string like every other model.
+- `-shortest` must stay OUT of the ffmpeg overlay call: the band is a still image input and
+  would otherwise truncate the output to nothing.
+
+## GPT Image 2's advantage is composition, not spelling
+
+An earlier version of the docs claimed it was the only model that renders legible text. That
+was wrong and was corrected on evidence: given an identical `--allow-text` comic prompt,
+nano-banana-2 spelled its speech bubbles perfectly. What `gpt2` did that the others did not
+was render the *fifth thing in the prompt* — the off-camera second screen with the metrics on
+it, the detail carrying the joke. It costs ~5x the wall-clock for that. Explore cheap, finish
+on gpt2. Don't reinstate the spelling claim.

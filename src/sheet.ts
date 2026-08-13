@@ -27,10 +27,21 @@ function cardHtml(c: Cell): string {
   <figcaption><b>${esc(c.model)}</b> · #${c.iteration}<br><span class="err">${esc(c.error)}</span></figcaption>
 </figure>`;
   }
+  // A video cell shows the branded clip itself; the poster card is linked beside it.
+  const media = c.videoFile
+    ? `<video src="${esc(c.videoFile)}" poster="${esc(c.ogFile!)}" controls preload="none" playsinline></video>`
+    : `<a href="${esc(c.ogFile!)}" target="_blank"><img src="${esc(c.ogFile!)}" alt="${esc(c.style)} by ${esc(c.model)}" loading="lazy"></a>`;
+
+  const extras = c.videoFile
+    ? `<a class="raw" href="${esc(c.rawVideoFile!)}" target="_blank">unbranded</a> <a class="raw" href="${esc(c.ogFile!)}" target="_blank">poster</a>`
+    : `<a class="raw" href="${esc(c.artFile!)}" target="_blank">unbranded</a>`;
+
+  const len = c.seconds_ ? ` · ${c.seconds_}s clip` : '';
+
   return `<figure class="card">
-  <a href="${esc(c.ogFile!)}" target="_blank"><img src="${esc(c.ogFile!)}" alt="${esc(c.style)} by ${esc(c.model)}" loading="lazy"></a>
-  <figcaption><b>${esc(c.model)}</b> · #${c.iteration} · ${esc(c.tier)} · ${usd(c.costUsd)} · ${c.seconds}s
-    <a class="raw" href="${esc(c.artFile!)}" target="_blank">unbranded</a></figcaption>
+  ${media}
+  <figcaption><b>${esc(c.model)}</b> · #${c.iteration} · ${esc(c.tier)}${len} · ${usd(c.costUsd)} · ${c.seconds}s gen
+    ${extras}</figcaption>
 </figure>`;
 }
 
@@ -110,7 +121,8 @@ export async function writeSheet(
   details p { color:var(--mute); font-size:14px; border-left:2px solid var(--line); padding-left:12px }
   .grid { display:grid; gap:20px; grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr)) }
   .card { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden }
-  .card img { width:100%; display:block; aspect-ratio:1200/630; object-fit:cover }
+  .card img, .card video { width:100%; display:block; aspect-ratio:1200/630; object-fit:cover;
+                           background:#000 }
   figcaption { padding:10px 12px; font-size:13px; color:var(--mute) }
   figcaption b { color:var(--ink) }
   .raw { float:right; color:var(--faint) }

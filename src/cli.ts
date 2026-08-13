@@ -40,7 +40,11 @@ gen
                            or models disagree about who the reference is
       --title <text>       headline burned into the brand band       (default: the prompt)
       --kicker <text>      small red line above the title
-      --tier <key>         quality/resolution hint, e.g. low, 2K
+      --tier <key>         quality/resolution hint, e.g. low, 2K, without_audio
+      --seconds <n>        clip length for video models (each has its own set)
+      --allow-text         let the model draw text IN the picture — speech bubbles,
+                           captions, signage. Off by default: the brand band is the
+                           only text guaranteed to be spelled correctly
       --extra <text>       appended verbatim to every prompt
   -o, --out <dir>          run directory                             (default: out/<date>_<slug>)
   -c, --concurrency <n>    parallel renders                          (default: 4)
@@ -87,6 +91,8 @@ async function cmdGen(argv: string[]): Promise<void> {
       title: { type: 'string' },
       kicker: { type: 'string' },
       tier: { type: 'string' },
+      seconds: { type: 'string' },
+      'allow-text': { type: 'boolean' },
       extra: { type: 'string' },
       out: { type: 'string', short: 'o' },
       concurrency: { type: 'string', short: 'c' },
@@ -117,7 +123,8 @@ async function cmdGen(argv: string[]): Promise<void> {
   const concurrency = Number(values.concurrency ?? 4);
 
   const refMp = await refMegapixels(refs.filter((r) => !/^https?:|^data:/i.test(r)));
-  const est = estimate({ ideas, styles, models, iterations, tier: values.tier }, refMp);
+  const seconds = values.seconds ? Number(values.seconds) : undefined;
+  const est = estimate({ ideas, styles, models, iterations, tier: values.tier, seconds }, refMp);
   const total = ideas.length * styles.length * models.length * iterations;
 
   console.log(`styles  ${styles.map((s) => s.slug).join(', ')}`);
@@ -140,6 +147,7 @@ async function cmdGen(argv: string[]): Promise<void> {
         idea: ideas[0],
         hasRefs: refs.length > 0,
         refRole: values['ref-role'],
+        allowText: values['allow-text'],
         extra: values.extra,
       }),
     );
@@ -158,6 +166,8 @@ async function cmdGen(argv: string[]): Promise<void> {
     title,
     kicker: values.kicker,
     tier: values.tier,
+    seconds,
+    allowText: values['allow-text'],
     refRole: values['ref-role'],
     extra: values.extra,
     outDir,

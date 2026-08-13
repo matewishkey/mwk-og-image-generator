@@ -11,8 +11,9 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { applyBrand, loadBrand, type BrandConfig } from './brand.ts';
 import { compose } from './prompt.ts';
-import { priceOf, type ModelSpec } from './models.ts';
-import { firstImage, replicate, toDataUri } from './replicate.ts';
+import { pickSeconds, priceOf, type ModelSpec } from './models.ts';
+import { firstOutput, replicate, toDataUri } from './replicate.ts';
+import { brandVideo, posterFrame } from './video.ts';
 import type { Style } from './style.ts';
 
 export interface Cell {
@@ -27,6 +28,10 @@ export interface Cell {
   /** Relative to the run directory. */
   artFile?: string;
   ogFile?: string;
+  /** Video cells only: the raw clip and the one with the band burned in. */
+  rawVideoFile?: string;
+  videoFile?: string;
+  seconds_?: number;
   prompt: string;
   costUsd: number;
   seconds?: number;
@@ -55,6 +60,10 @@ export interface RunOpts {
   title: string;
   kicker?: string;
   tier?: string;
+  /** Requested clip length for video models. */
+  seconds?: number;
+  /** Allow text inside the picture. See ComposeOpts.allowText. */
+  allowText?: boolean;
   /** Who the reference person is in the scene. See ComposeOpts.refRole. */
   refRole?: string;
   extra?: string;
@@ -86,11 +95,18 @@ export async function refMegapixels(paths: string[]): Promise<number> {
 
 /** Cost of a run before it starts. Cheap insurance against a typo in `-n`. */
 export function estimate(
-  opts: Pick<RunOpts, 'ideas' | 'styles' | 'models' | 'iterations' | 'tier'>,
+  opts: Pick<RunOpts, 'ideas' | 'styles' | 'models' | 'iterations' | 'tier' | 'seconds'>,
   refMp = 0,
 ): number {
   const perRound = opts.models.reduce(
-    (sum, m) => sum + priceOf(m, pickTier(m, opts.tier), m.refStyle === 'single' ? 0 : refMp),
+    (sum, m) =>
+      sum +
+      priceOf(
+        m,
+        pickTier(m, opts.tier),
+        m.refStyle === 'single' ? 0 : refMp,
+        pickSeconds(m, opts.seconds),
+      ),
     0,
   );
   return perRound * opts.styles.length * opts.ideas.length * opts.iterations;
@@ -113,18 +129,47 @@ async function runCell(
   const started = Date.now();
   try {
     const usable = model.refStyle === 'none' ? [] : refUris.slice(0, model.maxRefs);
-    const input = model.buildInput({ prompt: cell.prompt, refs: usable, tier: cell.tier });
+    const seconds = pickSeconds(model, opts.seconds);
+    const input = model.buildInput({ prompt: cell.prompt, refs: usable, tier: cell.tier, seconds });
 
     const output = await replicate().run(model.id as `${string}/${string}`, { input });
-    const art = await firstImage(output);
+    const bytes = await firstOutput(output);
 
     const stem = `i${cell.ideaIndex}__${style.slug}__${model.alias}__${cell.iteration}`;
-    cell.artFile = join('art', `${stem}.png`);
-    await writeFile(join(opts.outDir, cell.artFile), art);
+    const text = { title: opts.title, kicker: opts.kicker };
 
-    const og = await applyBrand({ art, brand, title: opts.title, kicker: opts.kicker });
-    cell.ogFile = join('og', `${stem}.png`);
-    await writeFile(join(opts.outDir, cell.ogFile), og);
+    if (model.modality === 'video') {
+      cell.seconds_ = seconds;
+      cell.rawVideoFile = join('raw', `${stem}.mp4`);
+      await writeFile(join(opts.outDir, cell.rawVideoFile), bytes);
+
+      cell.videoFile = join('video', `${stem}.mp4`);
+      await brandVideo(
+        join(opts.outDir, cell.rawVideoFile),
+        join(opts.outDir, cell.videoFile),
+        brand,
+        text,
+      );
+
+      // A poster doubles as the OG card for the clip, so a video run still yields
+      // something shareable that is not a video.
+      const poster = await posterFrame(join(opts.outDir, cell.rawVideoFile));
+      cell.artFile = join('art', `${stem}.png`);
+      await writeFile(join(opts.outDir, cell.artFile), poster);
+      cell.ogFile = join('og', `${stem}.png`);
+      await writeFile(
+        join(opts.outDir, cell.ogFile),
+        await applyBrand({ art: poster, brand, ...text }),
+      );
+    } else {
+      cell.artFile = join('art', `${stem}.png`);
+      await writeFile(join(opts.outDir, cell.artFile), bytes);
+      cell.ogFile = join('og', `${stem}.png`);
+      await writeFile(
+        join(opts.outDir, cell.ogFile),
+        await applyBrand({ art: bytes, brand, ...text }),
+      );
+    }
   } catch (e) {
     cell.error = (e as Error).message;
     // A cell that never produced an image was never billed.
@@ -138,6 +183,10 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
   const brand = await loadBrand();
   await mkdir(join(opts.outDir, 'art'), { recursive: true });
   await mkdir(join(opts.outDir, 'og'), { recursive: true });
+  if (opts.models.some((m) => m.modality === 'video')) {
+    await mkdir(join(opts.outDir, 'raw'), { recursive: true });
+    await mkdir(join(opts.outDir, 'video'), { recursive: true });
+  }
 
   const refUris = await Promise.all(opts.refs.map(toDataUri));
   const runRefMp = await refMegapixels(opts.refs.filter((r) => !/^https?:|^data:/i.test(r)));
@@ -178,6 +227,7 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
                 idea,
                 hasRefs: cellRefs.length > 0,
                 refRole: opts.refRole,
+                allowText: opts.allowText,
                 extra: opts.extra,
               }),
               // Single-reference models only ever receive one image, so they are never
@@ -186,6 +236,7 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
                 model,
                 tier,
                 model.refStyle === 'single' ? runRefMp / Math.max(cellRefs.length, 1) : runRefMp,
+                pickSeconds(model, opts.seconds),
               ),
             },
           });

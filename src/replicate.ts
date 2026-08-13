@@ -45,8 +45,11 @@ export async function toDataUri(path: string): Promise<string> {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
-/** Replicate returns a FileOutput, a URL string, or an array of either. Flatten to bytes. */
-export async function firstImage(output: unknown): Promise<Buffer> {
+/**
+ * Replicate returns a FileOutput, a URL string, or an array of either. Flatten to bytes.
+ * Used for video as much as stills — the shapes are identical, only the bytes differ.
+ */
+export async function firstOutput(output: unknown): Promise<Buffer> {
   const one = Array.isArray(output) ? output[0] : output;
   if (one == null) throw new Error('Model returned no output');
 
