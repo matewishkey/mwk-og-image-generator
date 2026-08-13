@@ -42,6 +42,7 @@ gen
                            or models disagree about who the reference is
       --title <text>       headline burned into the brand band       (default: the prompt)
       --kicker <text>      small red line above the title
+      --tagline <text>     standfirst under the title, e.g. a strapline
       --tier <key>         quality/resolution hint, e.g. low, 2K, without_audio
       --seconds <n>        clip length for video models (each has its own set)
       --allow-text         let the model draw text IN the picture — speech bubbles,
@@ -63,8 +64,9 @@ montage
                            art/ frames, not the og/ cards, or every panel carries its
                            own band
       --label <text>       caption for each panel; repeat, one per image
-      --title <text>       headline for the band
+      --title <text>       headline for the band; *asterisks* set a word in red
       --kicker <text>      small red line above the title
+      --tagline <text>     standfirst under the title
       --columns <n>        panels per row                            (default: 2)
       --og                 also write a cropped 1200x630 version
   -o, --out <file>         output path                               (default: montage.png)
@@ -103,6 +105,7 @@ async function cmdGen(argv: string[]): Promise<void> {
       'ref-role': { type: 'string' },
       title: { type: 'string' },
       kicker: { type: 'string' },
+      tagline: { type: 'string' },
       tier: { type: 'string' },
       seconds: { type: 'string' },
       'allow-text': { type: 'boolean' },
@@ -178,6 +181,7 @@ async function cmdGen(argv: string[]): Promise<void> {
     refs,
     title,
     kicker: values.kicker,
+    tagline: values.tagline,
     tier: values.tier,
     seconds,
     allowText: values['allow-text'],
@@ -287,6 +291,7 @@ async function cmdMontage(argv: string[]): Promise<void> {
       label: { type: 'string', multiple: true },
       title: { type: 'string' },
       kicker: { type: 'string' },
+      tagline: { type: 'string' },
       columns: { type: 'string' },
       og: { type: 'boolean' },
       out: { type: 'string', short: 'o' },
@@ -302,6 +307,7 @@ async function cmdMontage(argv: string[]): Promise<void> {
     brand,
     title: values.title,
     kicker: values.kicker,
+    tagline: values.tagline,
     columns: values.columns ? Number(values.columns) : 2,
   });
 
@@ -328,6 +334,7 @@ async function cmdBrand(argv: string[]): Promise<void> {
     options: {
       title: { type: 'string' },
       kicker: { type: 'string' },
+      tagline: { type: 'string' },
       out: { type: 'string', short: 'o' },
     },
   });
@@ -340,6 +347,7 @@ async function cmdBrand(argv: string[]): Promise<void> {
     brand: await loadBrand(),
     title: values.title,
     kicker: values.kicker,
+    tagline: values.tagline,
   });
 
   const dest = values.out ?? src.replace(/\.[^.]+$/, '') + '.og.png';

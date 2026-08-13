@@ -46,6 +46,7 @@ export interface RunManifest {
   ideas: string[];
   title: string;
   kicker?: string;
+  tagline?: string;
   refs: string[];
   estimatedUsd: number;
   actualUsd: number;
@@ -61,6 +62,7 @@ export interface RunOpts {
   refs: string[];
   title: string;
   kicker?: string;
+  tagline?: string;
   tier?: string;
   /** Requested clip length for video models. */
   seconds?: number;
@@ -175,7 +177,7 @@ async function runCell(
     if (!bytes) throw new Error('Exhausted retries with no output');
 
     const stem = `i${cell.ideaIndex}__${style.slug}__${model.alias}__${cell.iteration}`;
-    const text = { title: opts.title, kicker: opts.kicker };
+    const text = { title: opts.title, kicker: opts.kicker, tagline: opts.tagline };
 
     if (model.modality === 'video') {
       cell.seconds_ = seconds;
@@ -313,6 +315,7 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
     ideas: opts.ideas,
     title: opts.title,
     kicker: opts.kicker,
+    tagline: opts.tagline,
     refs: opts.refs,
     estimatedUsd: estimate(opts, runRefMp),
     actualUsd: results.reduce((s, c) => s + c.costUsd, 0),

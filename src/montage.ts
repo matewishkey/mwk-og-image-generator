@@ -22,6 +22,7 @@ export interface MontageOpts {
   brand: BrandConfig;
   title?: string;
   kicker?: string;
+  tagline?: string;
   /** Panels per row. 4 images at 2 gives the 2x2 grid. */
   columns?: number;
   /** Aspect ratio of each panel, width/height. Defaults to 16:9. */
@@ -64,6 +65,7 @@ export async function montage(opts: MontageOpts): Promise<Buffer> {
     brand,
     title,
     kicker,
+    tagline,
     columns = 2,
     panelAspect = 16 / 9,
     gutter = 2,
@@ -106,7 +108,7 @@ export async function montage(opts: MontageOpts): Promise<Buffer> {
   }
 
   layers.push({
-    input: await brandOverlay(brand, W, H, { title, kicker }, { scrim: false }),
+    input: await brandOverlay(brand, W, H, { title, kicker, tagline }, { scrim: false }),
     top: 0,
     left: 0,
   });

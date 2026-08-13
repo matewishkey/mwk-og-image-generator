@@ -179,3 +179,20 @@ picture, which the default frame rules forbid outright. `--allow-text` on its ow
 it also invites captions, speech bubbles and signage. Pair it with an `--extra` clause naming
 the screen as the *only* permitted text and the rest stays clean. Used on the vibe-coding
 panel 2 (2026-08-13) and it held.
+
+## The band lockup: wordmark + tagline
+
+`--title "Mate *Wish* Key" --tagline "No code. Just prompts. Wishes delivered."` is the house
+lockup. Two mechanics behind it:
+
+- **Asterisks set a word in red.** `emphasise()` in `brand.ts` splits on `*…*` and renders
+  those runs in `redDeep` — which is the design system's rule that red at body size is only
+  ever red-deep. The wordmark therefore stays a single string rather than three separately
+  positioned text layers that would need re-measuring on every size change.
+- **`tagline` is Manrope at `mute`**, per the system: Manrope is body copy, mute carries
+  standfirsts. It is NOT another Fraunces line — a second display face in the band flattens
+  the hierarchy the wordmark depends on.
+
+`kicker` and `tagline` are alternatives, not partners: kicker is a mono label ABOVE the title
+for a series or section, tagline is a sentence BELOW it. Using both in one band is possible
+and almost always wrong.

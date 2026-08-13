@@ -40,6 +40,7 @@ export interface BrandConfig {
   logo: { mark: string; size: number; markScale: number; x: number };
   title: FontSpec & { gap: number };
   kicker: FontSpec & { trackingEm: number; gapBelow: number };
+  tagline: FontSpec & { gapAbove: number };
 }
 
 export async function loadBrand(path = 'brand/brand.json'): Promise<BrandConfig> {
@@ -53,6 +54,8 @@ export interface BrandOpts {
   title?: string;
   /** Small red label above the title — a section, series or handle. */
   kicker?: string;
+  /** Standfirst under the title. Used for the strapline in a wordmark lockup. */
+  tagline?: string;
   brand: BrandConfig;
 }
 
@@ -77,6 +80,25 @@ function esc(s: string): string {
  * support the `font_variations` attribute, so Fraunces' WONK and SOFT axes are out of
  * reach and the face renders at its default optical settings. Verified, not assumed.
  */
+/**
+ * Split on *asterisk emphasis* and set the emphasised runs in red.
+ *
+ * The design system writes the wordmark as "Mate *Wish* Key" — middle word in red — and
+ * red at body size is only ever allowed as red-deep. Doing it as markup means the wordmark
+ * is one string in one place rather than three positioned text layers.
+ */
+function emphasise(text: string, base: string, accent: string): string {
+  return text
+    .split(/(\*[^*]+\*)/)
+    .filter(Boolean)
+    .map((run) =>
+      run.startsWith('*') && run.endsWith('*') && run.length > 2
+        ? `<span foreground="${accent}">${esc(run.slice(1, -1))}</span>`
+        : `<span foreground="${base}">${esc(run)}</span>`,
+    )
+    .join('');
+}
+
 export async function textLayer(opts: {
   text: string;
   font: FontSpec;
@@ -84,19 +106,21 @@ export async function textLayer(opts: {
   width: number;
   /** Letter spacing in ems, converted to Pango units (1024 per point). */
   trackingEm?: number;
+  /** When set, *asterisked* runs render in this colour. */
+  accent?: string;
 }): Promise<{ buf: Buffer; width: number; height: number }> {
   const tracking = opts.trackingEm ? Math.round(opts.trackingEm * opts.font.size * 1024) : 0;
-  const attrs = [
-    `weight="${opts.font.weight}"`,
-    `foreground="${opts.color}"`,
-    tracking ? `letter_spacing="${tracking}"` : '',
-  ]
+  const attrs = [`weight="${opts.font.weight}"`, tracking ? `letter_spacing="${tracking}"` : '']
     .filter(Boolean)
     .join(' ');
 
+  const body = opts.accent
+    ? emphasise(opts.text, opts.color, opts.accent)
+    : `<span foreground="${opts.color}">${esc(opts.text)}</span>`;
+
   const buf = await sharp({
     text: {
-      text: `<span ${attrs}>${esc(opts.text)}</span>`,
+      text: `<span ${attrs}>${body}</span>`,
       font: `${opts.font.family} ${opts.font.size}`,
       fontfile: opts.font.file,
       rgba: true,
@@ -178,6 +202,7 @@ function scaleBrand(b: BrandConfig, width: number, height: number): BrandConfig 
     band: { ...b.band, height: r(b.band.height), ruleHeight: Math.max(1, r(b.band.ruleHeight)) },
     logo: { ...b.logo, size: r(b.logo.size), x: r(b.logo.x) },
     title: { ...b.title, size: r(b.title.size), gap: r(b.title.gap) },
+    tagline: { ...b.tagline, size: r(b.tagline.size), gapAbove: r(b.tagline.gapAbove) },
     kicker: { ...b.kicker, size: r(b.kicker.size), gapBelow: r(b.kicker.gapBelow) },
   };
 }
@@ -192,7 +217,7 @@ export async function brandOverlay(
   brand: BrandConfig,
   width: number,
   height: number,
-  text: { title?: string; kicker?: string },
+  text: { title?: string; kicker?: string; tagline?: string },
   /**
    * The scrim exists to blend a photograph into the band. A montage has a hard grid
    * edge above the band instead, and a gradient there just dirties the bottom panels —
@@ -223,7 +248,7 @@ async function bandContents(
   b: BrandConfig,
   bandY: number,
   width: number,
-  text: { title?: string; kicker?: string },
+  text: { title?: string; kicker?: string; tagline?: string },
 ): Promise<OverlayOptions[]> {
   const layers: OverlayOptions[] = [];
 
@@ -261,8 +286,24 @@ async function bandContents(
       font: b.title,
       color: b.colors.ink,
       width: textWidth,
+      accent: b.colors.redDeep,
     });
     rendered.push({ buf: t.buf, height: t.height, gapAbove: kickerText ? b.kicker.gapBelow : 0 });
+  }
+
+  const taglineText = text.tagline?.trim();
+  if (taglineText) {
+    const g = await textLayer({
+      text: taglineText,
+      font: b.tagline,
+      color: b.colors.mute,
+      width: textWidth,
+    });
+    rendered.push({
+      buf: g.buf,
+      height: g.height,
+      gapAbove: titleText ? b.tagline.gapAbove : 0,
+    });
   }
 
   const blockHeight = rendered.reduce((sum, r) => sum + r.height + r.gapAbove, 0);
@@ -277,7 +318,7 @@ async function bandContents(
 }
 
 /** Compose artwork + brand furniture into the finished OG card. */
-export async function applyBrand({ art, title, kicker, brand }: BrandOpts): Promise<Buffer> {
+export async function applyBrand({ art, title, kicker, tagline, brand }: BrandOpts): Promise<Buffer> {
   const { width: W, height: H } = brand.canvas;
 
   // `attention` crops toward the salient region rather than the centre, which keeps a
@@ -286,6 +327,6 @@ export async function applyBrand({ art, title, kicker, brand }: BrandOpts): Prom
     .resize(W, H, { fit: 'cover', position: sharp.strategy.attention })
     .toBuffer();
 
-  const overlay = await brandOverlay(brand, W, H, { title, kicker });
+  const overlay = await brandOverlay(brand, W, H, { title, kicker, tagline });
   return sharp(base).composite([{ input: overlay, top: 0, left: 0 }]).png().toBuffer();
 }
