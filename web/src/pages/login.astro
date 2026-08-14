@@ -1,0 +1,84 @@
+---
+import Base from '../layouts/Base.astro';
+import { randomToken, sha256Hex } from '../lib/crypto';
+import { sendMail } from '../lib/ses';
+import { ulid } from '../lib/ulid';
+import { ENV } from '../lib/runtime';
+
+const env = ENV;
+if (Astro.locals.user) return Astro.redirect('/projects');
+
+let sent = false;
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const email = String(form.get('email') ?? '').trim();
+
+  // Invite-only: mail goes out only for a known address, but the page says the same
+  // thing either way — the form must not be an address oracle.
+  if (email.includes('@')) {
+    const user = await env.DB.prepare(
+      `SELECT id, email FROM user WHERE email = ?1 AND deactivated_at IS NULL`,
+    )
+      .bind(email)
+      .first<{ id: string; email: string }>();
+
+    if (user) {
+      const token = randomToken();
+      const now = new Date();
+      await env.DB.prepare(
+        `INSERT INTO login_token (id, email, token_hash, created_at, expires_at, request_ip)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      )
+        .bind(
+          ulid(),
+          user.email,
+          await sha256Hex(token),
+          now.toISOString(),
+          new Date(now.getTime() + 15 * 60_000).toISOString(),
+          Astro.request.headers.get('cf-connecting-ip'),
+        )
+        .run();
+      const link = `${env.PUBLIC_ORIGIN}/auth/verify?token=${token}`;
+      await sendMail(
+        env,
+        user.email,
+        'Sign in to MWK Studio',
+        `Follow this link to sign in — it works once and expires in 15 minutes:\n\n${link}\n\nIf you did not ask for this, ignore it.`,
+      );
+    }
+  }
+  sent = true;
+}
+---
+
+<Base title="Sign in">
+  <div class="login-box">
+    <p class="kicker"><span class="g">/</span>MWK Studio</p>
+    <h1>Sign in</h1>
+    {
+      sent ? (
+        <p class="sub">
+          If that address is known here, a sign-in link is on its way. It works once and
+          expires in 15 minutes.
+        </p>
+      ) : (
+        <>
+          <p class="sub">Invite-only. Enter your address and a sign-in link is mailed to you.</p>
+          <form method="post">
+            <label class="field">
+              <span>Email</span>
+              <input type="email" name="email" required autocomplete="email" autofocus />
+            </label>
+            <button class="btn" type="submit">Send the link</button>
+          </form>
+        </>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .login-box { max-width: 26rem; margin: 12vh auto 0; }
+  h1 { margin-bottom: 0.5rem; }
+  .sub { margin-bottom: 1.5rem; }
+</style>

@@ -1,0 +1,153 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ProjectTabs from '../../../components/ProjectTabs.astro';
+import { ENV } from '../../../lib/runtime';
+import { ulid } from '../../../lib/ulid';
+import { loadProject } from '../../../lib/data';
+import { createRun, estimateMicros, microsToUsd } from '../../../lib/runs';
+
+const env = ENV;
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+let bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+
+let error = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const now = new Date().toISOString();
+
+  if (action === 'add-shot') {
+    const prompt = String(form.get('prompt') ?? '').trim();
+    if (prompt) {
+      const next = (bundle.shots.at(-1)?.position ?? 0) + 1;
+      await env.DB.prepare(
+        `INSERT INTO shot (id, project_id, position, label, prompt, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)`,
+      )
+        .bind(
+          ulid(),
+          bundle.project.id,
+          next,
+          String(form.get('label') ?? '').trim() || null,
+          prompt,
+          now,
+        )
+        .run();
+    }
+  } else if (action === 'edit-shot') {
+    const shotId = String(form.get('shot') ?? '');
+    const prompt = String(form.get('prompt') ?? '').trim();
+    if (prompt && bundle.shots.some((s) => s.id === shotId)) {
+      await env.DB.prepare(
+        `UPDATE shot SET prompt=?1, label=?2, version=version+1, updated_at=?3 WHERE id=?4`,
+      )
+        .bind(prompt, String(form.get('label') ?? '').trim() || null, now, shotId)
+        .run();
+    }
+  } else if (action === 'delete-shot') {
+    const shotId = String(form.get('shot') ?? '');
+    if (bundle.shots.some((s) => s.id === shotId)) {
+      await env.DB.prepare(`UPDATE shot SET deleted_at=?1 WHERE id=?2`).bind(now, shotId).run();
+    }
+  } else if (action === 'run') {
+    if (!bundle.shots.length) error = 'Add at least one shot first.';
+    else {
+      try {
+        await createRun(env, {
+          teamId: team.id,
+          userId: user.id,
+          project: bundle.project,
+          style: bundle.style,
+          shots: bundle.shots,
+          models: JSON.parse(bundle.project.models),
+          iterations: bundle.project.iterations,
+          kind: 'full',
+        });
+        return Astro.redirect(`/projects/${slug}/takes`);
+      } catch (e) {
+        error = `The run could not start: ${(e as Error).message}`;
+      }
+    }
+  }
+  bundle = (await loadProject(env, team.id, slug))!;
+}
+
+const models: string[] = JSON.parse(bundle.project.models);
+const estimate = estimateMicros(
+  models,
+  bundle.project.tier,
+  bundle.shots.length * bundle.project.iterations,
+);
+---
+
+<Base title={bundle.project.name} nav="projects">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
+    <h1>Shots</h1>
+    <p class="sub">
+      Style: <b>{bundle.style.name}</b> · Models: <span class="mono">{models.join(', ')}</span> ·
+      {bundle.project.iterations} iteration{bundle.project.iterations === 1 ? '' : 's'}
+    </p>
+  </div>
+
+  <ProjectTabs slug={slug} active="shots" />
+
+  {error && <p class="flash">{error}</p>}
+
+  {
+    bundle.shots.map((s) => (
+      <details class="card shot-card">
+        <summary>
+          <span class="mono shot-pos">{s.position}</span>
+          <b>{s.label ?? `Shot ${s.position}`}</b>
+          <span class="shot-preview">{s.prompt.slice(0, 110)}{s.prompt.length > 110 ? '…' : ''}</span>
+        </summary>
+        <form method="post" class="shot-edit">
+          <input type="hidden" name="action" value="edit-shot" />
+          <input type="hidden" name="shot" value={s.id} />
+          <label class="field"><span>Label</span><input type="text" name="label" value={s.label ?? ''} /></label>
+          <label class="field"><span>What is happening — never a medium, never a palette</span>
+            <textarea name="prompt">{s.prompt}</textarea></label>
+          <div class="row">
+            <button class="btn small" type="submit">Save</button>
+            <button class="btn small ghost" type="submit" name="action" value="delete-shot"
+              onclick="return confirm('Delete this shot?')">Delete</button>
+          </div>
+        </form>
+      </details>
+    ))
+  }
+
+  <details class="card add-shot" open={bundle.shots.length === 0}>
+    <summary><b>Add a shot</b></summary>
+    <form method="post">
+      <input type="hidden" name="action" value="add-shot" />
+      <label class="field"><span>Label</span><input type="text" name="label" placeholder="optional" /></label>
+      <label class="field"><span>What is happening</span><textarea name="prompt" required></textarea></label>
+      <button class="btn small" type="submit">Add shot</button>
+    </form>
+  </details>
+
+  <form method="post" class="run-bar">
+    <input type="hidden" name="action" value="run" />
+    <button class="btn" type="submit" disabled={!bundle.shots.length}>
+      Run {bundle.shots.length} shot{bundle.shots.length === 1 ? '' : 's'} · estimated {microsToUsd(estimate)}
+    </button>
+  </form>
+</Base>
+
+<style>
+  .shot-card summary { display: flex; align-items: baseline; gap: 0.7rem; cursor: pointer; }
+  .shot-pos { color: var(--faint); font-weight: 700; }
+  .shot-preview { color: var(--mute); font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .shot-edit, .add-shot form { margin-top: 1rem; }
+  .row { display: flex; gap: 0.6rem; }
+  .add-shot { margin-top: 1.5rem; }
+  .add-shot summary { cursor: pointer; }
+  .run-bar { margin-top: 2rem; }
+</style>

@@ -1,0 +1,74 @@
+---
+import Base from '../../layouts/Base.astro';
+import { randomToken, sha256Hex } from '../../lib/crypto';
+import { ENV } from '../../lib/runtime';
+
+const env = ENV;
+const token = Astro.url.searchParams.get('token') ?? '';
+const now = new Date();
+
+let failed = true;
+if (token) {
+  // Single-use consume: one conditional UPDATE, checked by what it returns. There are
+  // no cross-request transactions on D1, so the precondition and the write are one
+  // statement, never a read-then-write.
+  const consumed = await env.DB.prepare(
+    `UPDATE login_token SET consumed_at = ?1
+      WHERE token_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1
+      RETURNING email`,
+  )
+    .bind(now.toISOString(), await sha256Hex(token))
+    .first<{ email: string }>();
+
+  if (consumed) {
+    const user = await env.DB.prepare(
+      `SELECT id FROM user WHERE email = ?1 AND deactivated_at IS NULL`,
+    )
+      .bind(consumed.email)
+      .first<{ id: string }>();
+
+    if (user) {
+      const cookie = randomToken();
+      const expires = new Date(now.getTime() + 30 * 86_400_000);
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO session (id, user_id, created_at, expires_at, last_seen_at, user_agent)
+           VALUES (?1, ?2, ?3, ?4, ?3, ?5)`,
+        ).bind(
+          await sha256Hex(cookie),
+          user.id,
+          now.toISOString(),
+          expires.toISOString(),
+          Astro.request.headers.get('user-agent'),
+        ),
+        env.DB.prepare(`UPDATE user SET last_login_at = ?1 WHERE id = ?2`).bind(
+          now.toISOString(),
+          user.id,
+        ),
+      ]);
+      Astro.cookies.set('mwk_session', cookie, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'lax',
+        path: '/',
+        expires,
+      });
+      return Astro.redirect('/projects');
+    }
+  }
+}
+---
+
+<Base title="Sign in">
+  <div class="verify-box">
+    <h1>That link didn't work</h1>
+    <p class="sub">
+      Sign-in links work once and expire after 15 minutes. <a href="/login">Ask for a fresh one.</a>
+    </p>
+  </div>
+</Base>
+
+<style>
+  .verify-box { max-width: 26rem; margin: 12vh auto 0; }
+  h1 { margin-bottom: 0.5rem; }
+</style>

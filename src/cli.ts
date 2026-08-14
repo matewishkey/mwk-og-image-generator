@@ -15,7 +15,8 @@ import { DEFAULT_SWEEP, MODELS, PRICES_VERIFIED_ON, resolveModel, priceOf } from
 import { BRAINSTORM_SYSTEM, brainstormPrompt, parseBrainstorm } from './prompt.ts';
 import { runSweep, estimate, refMegapixels } from './run.ts';
 import { writeReadme, writeSheet } from './sheet.ts';
-import { listStyles, loadStyle, saveStyle, slugify, type Style } from './style.ts';
+import { slugify, type Style } from './style.ts';
+import { listStyles, loadStyle, saveStyle } from './style-fs.ts';
 import { runText, toDataUri } from './replicate.ts';
 import { readFile } from 'node:fs/promises';
 

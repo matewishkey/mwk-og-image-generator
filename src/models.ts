@@ -587,6 +587,12 @@ export function priceOf(model: ModelSpec, tier?: string, refMp = 0, seconds?: nu
 }
 
 /** A clip length the model actually offers, or its default. */
+/** A tier the model actually offers, or its default. A requested tier is a hint, not a demand. */
+export function pickTier(model: ModelSpec, requested?: string): string {
+  if (requested && model.tiers.includes(requested)) return requested;
+  return model.tiers[0];
+}
+
 export function pickSeconds(model: ModelSpec, requested?: number): number | undefined {
   if (!model.durations?.length) return undefined;
   if (requested && model.durations.includes(requested)) return requested;

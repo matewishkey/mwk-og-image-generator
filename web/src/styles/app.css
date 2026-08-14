@@ -1,0 +1,174 @@
+/*
+ * App chrome on top of the vendored tokens. Everything here uses the site's own
+ * variables; no new colours, no new faces. "Nothing on this site moves" — the one
+ * carve-out is text that updates (status words, elapsed seconds).
+ */
+
+.page-main {
+  padding-top: calc(var(--nav-h) + 2rem);
+  padding-bottom: 4rem;
+}
+
+/* nav — recreated from the site's scoped styles, same tokens */
+.site-nav {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 100;
+  height: var(--nav-h);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.nav-inner {
+  max-width: var(--page);
+  height: 100%;
+  padding-inline: var(--gutter);
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+.brand { display: flex; align-items: center; gap: 0.6rem; color: var(--ink); }
+.brand:hover { text-decoration: none; }
+.brand:hover .wm em { color: var(--red-bright); }
+
+/* The RedBlock is the only logo: red square, square corners, mark centred at 64%. */
+.redblock {
+  width: 2rem;
+  aspect-ratio: 1;
+  background: var(--red);
+  color: var(--on-red);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.redblock svg { width: 64%; height: auto; }
+
+.wm {
+  font-family: var(--font-display), Georgia, 'Times New Roman', serif;
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.wm em { color: var(--red); font-style: normal; }
+.wm-app { color: var(--faint); font-weight: 400; margin-left: 0.15rem; }
+
+.links { display: flex; align-items: center; gap: 1.15rem; font: 700 0.9rem/1 var(--font-body); }
+.links a { color: var(--mute); white-space: nowrap; }
+.links a:hover { color: var(--ink); text-decoration: none; }
+.links a[aria-current='page'] { color: var(--accent); }
+.tt {
+  border: 1px solid var(--edge);
+  width: 2.1rem;
+  height: 2.1rem;
+  color: var(--mute);
+  cursor: pointer;
+  background: none;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+}
+.tt:hover { color: var(--accent); border-color: var(--accent); }
+.linkish {
+  border: 0;
+  background: none;
+  color: var(--mute);
+  font: 700 0.9rem/1 var(--font-body);
+  cursor: pointer;
+  padding: 0;
+}
+.linkish:hover { color: var(--ink); }
+
+/* headings & page furniture */
+.page-head { margin-bottom: 2rem; }
+.page-head h1 { font-size: 1.9rem; margin-bottom: 0.3rem; }
+.page-head .kicker { margin-bottom: 0.6rem; }
+.sub { color: var(--mute); max-width: var(--measure); }
+
+/* forms — red at body size is only ever --red-deep; fields use --red-field */
+.field { display: block; margin-bottom: 1.1rem; }
+.field > span {
+  display: block;
+  font: 700 0.69rem/1 var(--font-label);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 0.45rem;
+}
+input[type='text'],
+input[type='email'],
+input[type='number'],
+textarea,
+select {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  font: 400 1rem/1.5 var(--font-body);
+  padding: 0.6rem 0.75rem;
+}
+textarea { min-height: 6.5rem; resize: vertical; }
+input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 1px;
+}
+input[type='checkbox'] { accent-color: var(--red-field); }
+
+.btn {
+  display: inline-block;
+  background: var(--red-field);
+  color: var(--on-red);
+  border: 0;
+  border-radius: var(--radius);
+  font: 700 0.95rem/1 var(--font-body);
+  padding: 0.7rem 1.2rem;
+  cursor: pointer;
+}
+.btn:hover { background: var(--red-field-hover); text-decoration: none; }
+.btn.ghost {
+  background: none;
+  color: var(--ink);
+  border: 1px solid var(--edge);
+}
+.btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+.btn.small { padding: 0.45rem 0.8rem; font-size: 0.85rem; }
+
+/* cards & lists */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+.card + .card { margin-top: 1rem; }
+.grid { display: grid; gap: 1rem; }
+.grid > * { min-width: 0; }
+
+/* status words — mono, no animation; the elapsed count is text that updates */
+.status { font: 700 0.75rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; }
+.status.queued    { color: var(--faint); }
+.status.running,
+.status.rendering { color: var(--accent); }
+.status.succeeded { color: var(--ink); }
+.status.failed,
+.status.cancelled { color: var(--red); }
+
+.mono { font-family: var(--font-mono); }
+.money { font: 700 0.85rem/1 var(--font-mono); color: var(--mute); }
+
+/* flash messages */
+.flash {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--red);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 0.8rem 1rem;
+  margin-bottom: 1.5rem;
+  max-width: var(--measure);
+}

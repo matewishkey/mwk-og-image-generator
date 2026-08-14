@@ -1,5 +1,8 @@
 node_modules/
 out/
+web/dist/
+web/.astro/
+.wrangler/
 refs/*
 !refs/.gitkeep
 .env

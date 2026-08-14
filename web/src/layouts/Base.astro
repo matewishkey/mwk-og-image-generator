@@ -1,0 +1,66 @@
+---
+import '../styles/tokens.css';
+import '../styles/app.css';
+
+interface Props {
+  title: string;
+  /** Which top-nav item is current, if any. */
+  nav?: 'projects' | 'styles' | 'models' | 'history' | 'team';
+}
+const { title, nav } = Astro.props;
+const user = Astro.locals.user;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>{title} · MWK Studio</title>
+    <script is:inline>
+      const t = localStorage.getItem('theme');
+      if (t) document.documentElement.dataset.theme = t;
+      else if (matchMedia('(prefers-color-scheme: dark)').matches)
+        document.documentElement.dataset.theme = 'dark';
+    </script>
+  </head>
+  <body>
+    <nav class="site-nav">
+      <div class="nav-inner">
+        <a class="brand" href="/">
+          <span class="redblock" aria-hidden="true">
+            <!-- brand/mwk-mark-white.svg, inlined -->
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="-6.75 -6.75 131.53 113.5" fill="none"><path d="M0 100 L23.09 0 L46.17 100 L69.26 0 L69.26 100" fill="none" stroke="currentColor" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M69.26 100 L118.03 0" fill="none" stroke="currentColor" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="wm">Mate <em>Wish</em> Key <span class="wm-app">Studio</span></span>
+        </a>
+        {user && (
+          <div class="links">
+            <a href="/projects" aria-current={nav === 'projects' ? 'page' : undefined}>Projects</a>
+            <a href="/styles" aria-current={nav === 'styles' ? 'page' : undefined}>Styles</a>
+            <a href="/models" aria-current={nav === 'models' ? 'page' : undefined}>Models</a>
+            <button class="tt" id="theme-toggle" aria-label="Toggle theme" type="button">◐</button>
+            <form method="post" action="/auth/logout"><button class="linkish" type="submit">Out</button></form>
+          </div>
+        )}
+        {!user && (
+          <div class="links">
+            <button class="tt" id="theme-toggle" aria-label="Toggle theme" type="button">◐</button>
+          </div>
+        )}
+      </div>
+    </nav>
+    <main class="wrap page-main">
+      <slot />
+    </main>
+    <script is:inline>
+      document.getElementById('theme-toggle')?.addEventListener('click', () => {
+        const el = document.documentElement;
+        const next = el.dataset.theme === 'dark' ? 'light' : 'dark';
+        el.dataset.theme = next;
+        localStorage.setItem('theme', next);
+      });
+    </script>
+  </body>
+</html>

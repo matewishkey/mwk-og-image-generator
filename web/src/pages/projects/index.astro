@@ -1,0 +1,61 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const projects = await env.DB.prepare(
+  `SELECT p.id, p.slug, p.name, p.description, p.updated_at,
+          (SELECT count(*) FROM shot sh WHERE sh.project_id = p.id AND sh.deleted_at IS NULL) AS shots,
+          (SELECT count(*) FROM run r WHERE r.project_id = p.id) AS runs
+     FROM project p
+    WHERE p.team_id = ?1 AND p.archived_at IS NULL
+    ORDER BY p.updated_at DESC`,
+)
+  .bind(team.id)
+  .all<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string;
+    updated_at: string;
+    shots: number;
+    runs: number;
+  }>();
+---
+
+<Base title="Projects" nav="projects">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{team.name}</p>
+    <h1>Projects</h1>
+  </div>
+
+  <p style="margin-bottom:1.5rem"><a class="btn" href="/projects/new">New project</a></p>
+
+  {
+    projects.results.length === 0 ? (
+      <p class="sub">Nothing yet. A project is one style, a set of models, and the shots you want.</p>
+    ) : (
+      <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(20rem,1fr))">
+        {projects.results.map((p) => (
+          <a class="card project-card" href={`/projects/${p.slug}/shots`}>
+            <h2>{p.name}</h2>
+            <p class="sub">{p.description}</p>
+            <p class="mono meta">
+              {p.shots} shot{p.shots === 1 ? '' : 's'} · {p.runs} run{p.runs === 1 ? '' : 's'}
+            </p>
+          </a>
+        ))}
+      </div>
+    )
+  }
+</Base>
+
+<style>
+  .project-card { display: block; color: var(--ink); }
+  .project-card:hover { text-decoration: none; border-color: var(--accent); }
+  .project-card h2 { font-size: 1.15rem; margin-bottom: 0.35rem; }
+  .project-card .meta { font-size: 0.75rem; color: var(--faint); margin-top: 0.6rem; }
+</style>

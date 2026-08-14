@@ -1,0 +1,208 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ProjectTabs from '../../../components/ProjectTabs.astro';
+import { ENV } from '../../../lib/runtime';
+import { loadProject } from '../../../lib/data';
+import { createRun, microsToUsd } from '../../../lib/runs';
+import { sweepLeases } from '../../../lib/sweep';
+
+const env = ENV;
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+await sweepLeases(env);
+const bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+
+let error = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  if (String(form.get('action')) === 'reroll') {
+    const takeId = String(form.get('take') ?? '');
+    const take = await env.DB.prepare(
+      `SELECT t.id, t.shot_id, t.model_alias FROM take t
+        JOIN run r ON r.id = t.run_id
+       WHERE t.id = ?1 AND t.team_id = ?2 AND r.project_id = ?3`,
+    )
+      .bind(takeId, team.id, bundle.project.id)
+      .first<{ id: string; shot_id: string; model_alias: string }>();
+    const shot = bundle.shots.find((s) => s.id === take?.shot_id);
+    if (take && shot) {
+      try {
+        await createRun(env, {
+          teamId: team.id,
+          userId: user.id,
+          project: bundle.project,
+          style: bundle.style,
+          shots: [shot],
+          models: [take.model_alias],
+          iterations: 1,
+          kind: 'take',
+          supersedeTakeId: take.id,
+        });
+        return Astro.redirect(`/projects/${slug}/takes`);
+      } catch (e) {
+        error = `The re-roll could not start: ${(e as Error).message}`;
+      }
+    }
+  }
+}
+
+interface TakeRow {
+  id: string;
+  shot_id: string;
+  model_alias: string;
+  tier: string;
+  iteration: number;
+  status: string;
+  card_key: string | null;
+  cost_micros: number;
+  duration_ms: number | null;
+  error_kind: string | null;
+  error_message: string | null;
+  created_at: string;
+  superseded_by_id: string | null;
+}
+
+const takes = await env.DB.prepare(
+  `SELECT t.id, t.shot_id, t.model_alias, t.tier, t.iteration, t.status, t.card_key,
+          t.cost_micros, t.duration_ms, t.error_kind, t.error_message, t.created_at,
+          t.superseded_by_id
+     FROM take t JOIN run r ON r.id = t.run_id
+    WHERE r.project_id = ?1 AND t.superseded_by_id IS NULL
+    ORDER BY t.model_alias, t.iteration, t.created_at DESC`,
+)
+  .bind(bundle.project.id)
+  .all<TakeRow>();
+
+const spent = await env.DB.prepare(
+  `SELECT coalesce(sum(c.usd_micros), 0) AS total FROM charge c
+     JOIN run r ON r.id = c.run_id WHERE r.project_id = ?1`,
+)
+  .bind(bundle.project.id)
+  .first<{ total: number }>();
+
+const byShot = new Map<string, TakeRow[]>();
+for (const t of takes.results) {
+  byShot.set(t.shot_id, [...(byShot.get(t.shot_id) ?? []), t]);
+}
+const anyLive = takes.results.some((t) => ['queued', 'running', 'rendering'].includes(t.status));
+
+const throttledSeen = takes.results.some((t) => t.error_kind === 'throttled');
+---
+
+<Base title={`${bundle.project.name} · takes`} nav="projects">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
+    <h1>Contact sheet</h1>
+    <p class="sub">
+      Spent so far: <span class="money">{microsToUsd(spent?.total ?? 0)}</span>. A re-roll is a new
+      take — the old one is never overwritten.
+    </p>
+  </div>
+
+  <ProjectTabs slug={slug} active="takes" />
+
+  {error && <p class="flash">{error}</p>}
+  {
+    throttledSeen && (
+      <p class="flash">
+        Replicate is throttling — this usually means the account balance is under $5, not a bug.
+      </p>
+    )
+  }
+
+  {
+    bundle.shots.map((shot) => (
+      <section class="shot-sheet">
+        <h2>
+          <span class="mono shot-pos">{shot.position}</span> {shot.label ?? `Shot ${shot.position}`}
+        </h2>
+        {!byShot.get(shot.id)?.length && <p class="sub">No takes yet — run the project from Shots.</p>}
+        <div class="takes-grid">
+          {(byShot.get(shot.id) ?? []).map((t) => (
+            <figure class="take" data-take={t.id} data-status={t.status} data-started={t.created_at}>
+              {t.status === 'succeeded' && t.card_key ? (
+                <a href={`/img/${t.card_key}`} target="_blank">
+                  <img src={`/img/${t.card_key}`} alt={`${t.model_alias} take`} loading="lazy" width="600" height="315" />
+                </a>
+              ) : (
+                <div class="take-hold">
+                  <span class={`status ${t.status}`}>{t.status}</span>
+                  {['queued', 'running', 'rendering'].includes(t.status) && (
+                    <span class="mono elapsed" data-elapsed />
+                  )}
+                  {t.status === 'failed' && <span class="err">{t.error_kind}: {(t.error_message ?? '').slice(0, 160)}</span>}
+                </div>
+              )}
+              <figcaption>
+                <span class="mono">{t.model_alias}</span>
+                <span class="mono faint">#{t.iteration}</span>
+                {t.cost_micros > 0 && <span class="money">{microsToUsd(t.cost_micros)}</span>}
+                {t.duration_ms != null && <span class="mono faint">{Math.round(t.duration_ms / 1000)}s</span>}
+                {t.status === 'succeeded' || t.status === 'failed' ? (
+                  <form method="post" class="reroll">
+                    <input type="hidden" name="action" value="reroll" />
+                    <input type="hidden" name="take" value={t.id} />
+                    <button class="btn small ghost" type="submit">Re-roll</button>
+                  </form>
+                ) : null}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      </section>
+    ))
+  }
+</Base>
+
+<script is:inline define:vars={{ anyLive, slug }}>
+  // Elapsed seconds are text that updates — the one deliberate carve-out from
+  // "nothing on this site moves". A 64-second gpt2 wait behind a frozen label
+  // reads as broken.
+  const tick = () => {
+    document.querySelectorAll('.take[data-started]').forEach((el) => {
+      const live = ['queued', 'running', 'rendering'].includes(el.dataset.status);
+      const out = el.querySelector('[data-elapsed]');
+      if (live && out) {
+        out.textContent = `${Math.max(0, Math.round((Date.now() - Date.parse(el.dataset.started)) / 1000))}s`;
+      }
+    });
+  };
+  tick();
+  if (anyLive) {
+    setInterval(tick, 1000);
+    const poll = async () => {
+      try {
+        const res = await fetch(`/projects/${slug}/takes.json`);
+        if (!res.ok) return;
+        const takes = await res.json();
+        for (const t of takes) {
+          const el = document.querySelector(`.take[data-take="${t.id}"]`);
+          if (el && el.dataset.status !== t.status) return location.reload();
+        }
+      } catch {}
+    };
+    setInterval(poll, 3000);
+  }
+</script>
+
+<style>
+  .shot-sheet { margin-bottom: 2.5rem; }
+  .shot-sheet h2 { font-size: 1.2rem; margin-bottom: 0.8rem; }
+  .shot-pos { color: var(--faint); }
+  .takes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 1rem; }
+  .takes-grid > * { min-width: 0; }
+  .take { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .take img { display: block; width: 100%; height: auto; }
+  .take-hold {
+    aspect-ratio: 1200 / 630; display: flex; flex-direction: column; gap: 0.5rem;
+    align-items: center; justify-content: center; padding: 1rem; text-align: center;
+  }
+  .err { color: var(--mute); font-size: 0.78rem; }
+  figcaption { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.7rem; font-size: 0.8rem; }
+  .faint { color: var(--faint); }
+  .reroll { margin-left: auto; }
+</style>

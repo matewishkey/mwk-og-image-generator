@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { applyBrand, loadBrand, type BrandConfig } from './brand.ts';
 import { compose } from './prompt.ts';
-import { pickSeconds, priceOf, type ModelSpec } from './models.ts';
+import { pickSeconds, pickTier, priceOf, type ModelSpec } from './models.ts';
 import { firstOutput, replicate, toDataUri } from './replicate.ts';
 import { brandVideo, posterFrame } from './video.ts';
 import type { Style } from './style.ts';
@@ -116,12 +116,6 @@ export function estimate(
     0,
   );
   return perRound * opts.styles.length * opts.ideas.length * opts.iterations;
-}
-
-/** A tier the model actually offers, or its default. `--tier` is a hint, not a demand. */
-function pickTier(model: ModelSpec, requested?: string): string {
-  if (requested && model.tiers.includes(requested)) return requested;
-  return model.tiers[0];
 }
 
 /**

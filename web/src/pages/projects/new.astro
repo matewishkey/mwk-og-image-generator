@@ -1,0 +1,146 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
+import { ulid } from '../../lib/ulid';
+import { slugify } from '../../../../src/style.ts';
+import { MODELS } from '../../../../src/models.ts';
+
+const env = ENV;
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
+
+const styles = await env.DB.prepare(
+  `SELECT s.id, s.slug, s.name, s.description, t.kind AS team_kind
+     FROM style s JOIN team t ON t.id = s.team_id
+    WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
+    ORDER BY t.kind DESC, s.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; slug: string; name: string; description: string; team_kind: string }>();
+
+const imageModels = MODELS.filter((m) => m.modality === 'image');
+const DEFAULT_CHECKED = new Set(['zturbo', 'pimage']);
+
+let error = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const name = String(form.get('name') ?? '').trim();
+  const styleId = String(form.get('style') ?? '');
+  const models = form.getAll('models').map(String);
+  const iterations = Math.max(1, Math.min(8, Number(form.get('iterations') ?? 1)));
+
+  if (!name) error = 'A project needs a name.';
+  else if (!models.length) error = 'Pick at least one model.';
+  else if (!styles.results.some((s) => s.id === styleId)) error = 'Pick a style.';
+  else {
+    const kit = await env.DB.prepare(
+      `SELECT b.id, b.default_title, b.default_tagline FROM brand_kit b
+         JOIN team t ON t.id = b.team_id
+        WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
+        ORDER BY t.kind DESC LIMIT 1`,
+    )
+      .bind(team.id)
+      .first<{ id: string; default_title: string | null; default_tagline: string | null }>();
+    if (!kit) {
+      error = 'No brand kit available.';
+    } else {
+      const slug = slugify(name) || ulid().toLowerCase();
+      const now = new Date().toISOString();
+      try {
+        await env.DB.prepare(
+          `INSERT INTO project (id, team_id, slug, name, description, default_style_id,
+             brand_kit_id, models, iterations, allow_text, title, tagline,
+             created_by, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13, ?13)`,
+        )
+          .bind(
+            ulid(),
+            team.id,
+            slug,
+            name,
+            String(form.get('description') ?? '').trim(),
+            styleId,
+            kit.id,
+            JSON.stringify(models),
+            iterations,
+            kit.default_title,
+            kit.default_tagline,
+            user.id,
+            now,
+          )
+          .run();
+        return Astro.redirect(`/projects/${slug}/shots`);
+      } catch (e) {
+        error = /UNIQUE/.test((e as Error).message)
+          ? `A project named "${slug}" already exists.`
+          : (e as Error).message;
+      }
+    }
+  }
+}
+---
+
+<Base title="New project" nav="projects">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>New project</p>
+    <h1>New project</h1>
+    <p class="sub">One style, a set of models, and the shots you want. Start cheap — draft on the half-cent models, finish on gpt2.</p>
+  </div>
+
+  {error && <p class="flash">{error}</p>}
+
+  <form method="post" class="new-project">
+    <label class="field">
+      <span>Name</span>
+      <input type="text" name="name" required autofocus />
+    </label>
+    <label class="field">
+      <span>Description</span>
+      <input type="text" name="description" placeholder="optional" />
+    </label>
+    <label class="field">
+      <span>Style</span>
+      <select name="style" required>
+        {styles.results.map((s) => (
+          <option value={s.id}>
+            {s.name} {s.team_kind === 'house' ? '· house' : ''}
+          </option>
+        ))}
+      </select>
+    </label>
+    <fieldset class="field">
+      <span>Models</span>
+      <div class="model-grid">
+        {imageModels.map((m) => (
+          <label class="model-pick">
+            <input type="checkbox" name="models" value={m.alias} checked={DEFAULT_CHECKED.has(m.alias)} />
+            <span class="mono">{m.alias}</span>
+            <span class="money">${m.priceUsd[m.tiers[0]!]}</span>
+            <span class="model-name">{m.label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+    <label class="field" style="max-width:8rem">
+      <span>Iterations</span>
+      <input type="number" name="iterations" value="1" min="1" max="8" />
+    </label>
+    <button class="btn" type="submit">Create project</button>
+  </form>
+</Base>
+
+<style>
+  .new-project { max-width: 44rem; }
+  fieldset { border: 0; }
+  .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.5rem; }
+  .model-grid > * { min-width: 0; }
+  .model-pick {
+    display: flex; align-items: center; gap: 0.5rem;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 0.5rem 0.7rem; cursor: pointer;
+  }
+  .model-pick:has(input:checked) { border-color: var(--accent); }
+  .model-pick .mono { font-weight: 700; font-size: 0.85rem; }
+  .model-name { color: var(--faint); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>

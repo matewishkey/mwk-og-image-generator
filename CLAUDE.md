@@ -69,9 +69,30 @@ so resist adding a direct OpenAI or Google client.
 
 ## Phase
 
-Phase 1 is the prompt workflow and it is what exists. The web UI is phase 2 — when it
-lands, `src/` is already the library it should call, so keep CLI concerns in `cli.ts` and
-nothing else.
+Phase 1 is the prompt workflow. Phase 2 (the web app) started landing 2026-08-14; `src/`
+is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
+
+## Phase 2 layout — og.matewishkey.com
+
+- `web/` — Astro SSR on Workers (worker `mwk-studio`, custom domain og.matewishkey.com;
+  D1 `mwk-studio`, R2 `mwk-studio`). Deploy: `cd web && npm run deploy`. Bindings come
+  from `wrangler.jsonc`; the build writes the resolved config to
+  `dist/server/wrangler.json`, which is what deploy uses.
+- `engine/` — worker `mwk-studio-engine` fronting ONE named container that runs
+  `src/run.ts` `runSweep` unchanged. Image from `engine/Dockerfile`, build context is the
+  repo root. Deploy: `cd engine && wrangler deploy` — needs the container-capable token
+  (`CLOUDFLARE_DEPLOY_TOKEN` in td-sops), the default env token lacks the Containers
+  permission.
+- `src/seam.ts` is the wire protocol, HMAC both directions, one module imported by both
+  sides. **Secrets live where they are used:** the web worker holds SES + `SEAM_SECRET`;
+  the engine holds `REPLICATE_API_TOKEN`, R2 S3 keys and `SEAM_SECRET`. The web app never
+  holds Replicate or R2 credentials — keep it that way.
+- Astro v6+ removed `Astro.locals.runtime.env`; bindings come from
+  `import { env } from 'cloudflare:workers'` via `web/src/lib/runtime.ts`, the one place
+  that touches it.
+- House styles and the house brand kit are seeded from `styles/*.yaml` and
+  `brand/brand.json` by `web/scripts/gen-seed.mjs` → migration `0002_seed.sql`.
+- The build plan (final, reviewed): https://work.l/mat-mwk-og-image-generator/2026-08-14_plan/
 
 ## Prompt fidelity is a correctness property, not a nicety
 

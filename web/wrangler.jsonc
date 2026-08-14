@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mwk-studio",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // main + assets are filled in by @astrojs/cloudflare's config customizer.
+  "observability": { "enabled": true },
+  "routes": [{ "pattern": "og.matewishkey.com", "custom_domain": true }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mwk-studio",
+      "database_id": "b058e59a-7f63-4a00-acc2-8db978c82b15",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "mwk-studio" }],
+  "services": [{ "binding": "ENGINE", "service": "mwk-studio-engine" }],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://og.matewishkey.com",
+    "SES_FROM": "MWK Studio <studio@mergodon.com>",
+    "SES_REGION": "us-east-1"
+  }
+  // Secrets (wrangler secret put): SES_ACCESS_KEY_ID, SES_SECRET_ACCESS_KEY, SEAM_SECRET
+  // Service binding to the engine worker is added when the engine deploys.
+}
