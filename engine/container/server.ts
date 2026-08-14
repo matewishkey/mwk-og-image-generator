@@ -16,11 +16,15 @@ import sharp from 'sharp';
 import { estimate, refMegapixels, runSweep, type Cell } from '../../src/run.ts';
 import { resolveModel } from '../../src/models.ts';
 import {
+  LayoutConfigSchema,
   seamHeaders,
   seamVerify,
   type EngineEvent,
+  type EngineRenderRequest,
   type EngineRunRequest,
 } from '../../src/seam.ts';
+import { loadBrand, type BrandConfig } from '../../src/brand.ts';
+import { renderDesign } from './layout.ts';
 
 const PORT = 8080;
 
@@ -147,6 +151,7 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
 
   let artKey: string | undefined;
   let cardKey: string | undefined;
+  let thumbKey: string | undefined;
   let width: number | undefined;
   let height: number | undefined;
 
@@ -159,8 +164,11 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
       height = meta.height;
       artKey = `${base}/art.png`;
       cardKey = `${base}/card.png`;
+      thumbKey = `${base}/thumb.webp`;
+      const thumb = await sharp(card).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
       await r2Put(artKey, art, 'image/png');
       await r2Put(cardKey, card, 'image/png');
+      await r2Put(thumbKey, thumb, 'image/webp');
     }
   } catch (e) {
     // The model was already billed even though storage failed; the event still goes
@@ -168,6 +176,7 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
     cell.error = `upload: ${(e as Error).message}`;
     artKey = undefined;
     cardKey = undefined;
+    thumbKey = undefined;
   }
 
   await postEvent({
@@ -186,6 +195,7 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
     error: cell.error,
     artKey,
     cardKey,
+    thumbKey,
     width,
     height,
   });
@@ -200,7 +210,7 @@ const server = createServer((req, res) => {
         res.writeHead(200).end('ok');
         return;
       }
-      if (req.method !== 'POST' || req.url !== '/run') {
+      if (req.method !== 'POST' || (req.url !== '/run' && req.url !== '/render')) {
         res.writeHead(404).end('not found');
         return;
       }
@@ -210,6 +220,20 @@ const server = createServer((req, res) => {
       };
       if (!(await seamVerify(SEAM_SECRET, headers, body))) {
         res.writeHead(401).end('bad signature');
+        return;
+      }
+      if (req.url === '/render') {
+        const r = JSON.parse(body) as EngineRenderRequest;
+        const cfg = LayoutConfigSchema.parse(r.layout);
+        const brand = r.brand ? (r.brand as BrandConfig) : await loadBrand();
+        const panels = [];
+        for (const pnl of r.panels) panels.push({ buf: await r2Get(pnl.key), label: pnl.label });
+        const png = await renderDesign(cfg, brand, r.width, r.height, r.text, panels);
+        const thumb = await sharp(png).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
+        await r2Put(r.outKey, png, 'image/png');
+        await r2Put(r.thumbKey, thumb, 'image/webp');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, width: r.width, height: r.height }));
         return;
       }
       const parsed = JSON.parse(body) as EngineRunRequest;

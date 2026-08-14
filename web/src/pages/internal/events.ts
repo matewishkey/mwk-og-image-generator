@@ -57,7 +57,7 @@ export const POST: APIRoute = async (ctx) => {
         env.DB.prepare(
           `UPDATE take SET status='succeeded', prompt=?1, art_key=?2, card_key=?3,
              width=?4, height=?5, cost_micros=?6, duration_ms=?7, attempt_count=?8,
-             finished_at=?9
+             finished_at=?9, thumb_key=?11
            WHERE id=?10 AND status IN ('queued','running','rendering')`,
         ).bind(
           event.prompt,
@@ -70,6 +70,7 @@ export const POST: APIRoute = async (ctx) => {
           (event.retries ?? 0) + 1,
           nowIso,
           take.id,
+          event.thumbKey ?? null,
         ),
       );
     } else {

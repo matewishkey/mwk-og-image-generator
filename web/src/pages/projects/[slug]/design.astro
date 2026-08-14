@@ -1,0 +1,187 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ProjectTabs from '../../../components/ProjectTabs.astro';
+import { ENV } from '../../../lib/runtime';
+import { loadProject } from '../../../lib/data';
+import { createDesign } from '../../../lib/design';
+import { ARCHETYPE_PANELS, LayoutConfigSchema } from '../../../../../src/seam.ts';
+
+const env = ENV;
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+const bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+
+// The inventory: this project's picks, in shot order, with their art.
+const picks = await env.DB.prepare(
+  `SELECT sh.id AS shot_id, sh.position, sh.label, t.id AS take_id, t.art_key, t.model_alias
+     FROM shot sh JOIN take t ON t.id = sh.picked_take_id
+    WHERE sh.project_id = ?1 AND sh.deleted_at IS NULL AND t.art_key IS NOT NULL
+    ORDER BY sh.position`,
+)
+  .bind(bundle.project.id)
+  .all<{ shot_id: string; position: number; label: string | null; take_id: string; art_key: string; model_alias: string }>();
+
+const layouts = await env.DB.prepare(
+  `SELECT l.id, l.slug, l.name, l.config FROM layout l JOIN team t ON t.id = l.team_id
+    WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL ORDER BY l.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; slug: string; name: string; config: string }>();
+
+const formats = await env.DB.prepare(`SELECT id, slug, name, width, height FROM format ORDER BY rowid`).all<{
+  id: string;
+  slug: string;
+  name: string;
+  width: number;
+  height: number;
+}>();
+
+const usable = layouts.results.filter((l) => {
+  const cfg = LayoutConfigSchema.safeParse(JSON.parse(l.config));
+  return cfg.success && ARCHETYPE_PANELS[cfg.data.archetype] <= picks.results.length;
+});
+
+let error = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  try {
+    await createDesign(env, {
+      teamId: team.id,
+      userId: user.id,
+      projectId: bundle.project.id,
+      layoutId: String(form.get('layout') ?? ''),
+      formatId: String(form.get('format') ?? ''),
+      brandKitId: bundle.project.brand_kit_id,
+      title: String(form.get('title') ?? '').trim() || undefined,
+      kicker: String(form.get('kicker') ?? '').trim() || undefined,
+      tagline: String(form.get('tagline') ?? '').trim() || undefined,
+      panels: picks.results.map((p) => ({
+        takeId: p.take_id,
+        artKey: p.art_key,
+        label: p.label ?? undefined,
+      })),
+    });
+    return Astro.redirect(`/projects/${slug}/design`);
+  } catch (e) {
+    error = (e as Error).message;
+  }
+}
+
+const designs = await env.DB.prepare(
+  `SELECT d.id, d.title, d.tagline, d.kicker, d.r2_key, d.thumb_key, d.width, d.height, d.created_at,
+          l.name AS layout_name, f.name AS format_name, f.slug AS format_slug
+     FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
+    WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
+    ORDER BY d.created_at DESC`,
+)
+  .bind(bundle.project.id)
+  .all<{
+    id: string;
+    title: string | null;
+    tagline: string | null;
+    kicker: string | null;
+    r2_key: string;
+    thumb_key: string;
+    width: number;
+    height: number;
+    created_at: string;
+    layout_name: string;
+    format_name: string;
+    format_slug: string;
+  }>();
+---
+
+<Base title={`${bundle.project.name} · design`} nav="projects">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
+    <h1>Design</h1>
+    <p class="sub">
+      Picks + a layout + a format = a finished card, rendered for $0.00. Changing the
+      words or the layout just makes another one — iterate freely.
+    </p>
+  </div>
+
+  <ProjectTabs slug={slug} active="design" />
+
+  {error && <p class="flash">{error}</p>}
+
+  {
+    picks.results.length === 0 ? (
+      <p class="sub">
+        No picks yet. Go to <a href={`/projects/${slug}/takes`}>Takes</a> and pick the take that
+        should represent each shot.
+      </p>
+    ) : (
+      <form method="post" class="design-form card">
+        <p class="inventory mono">
+          Inventory: {picks.results.length} pick{picks.results.length === 1 ? '' : 's'} —{' '}
+          {picks.results.map((p) => p.label ?? `shot ${p.position}`).join(' · ')}
+        </p>
+        <div class="form-grid">
+          <label class="field">
+            <span>Layout</span>
+            <select name="layout" required>
+              {usable.map((l) => (
+                <option value={l.id}>{l.name}</option>
+              ))}
+            </select>
+          </label>
+          <label class="field">
+            <span>Format</span>
+            <select name="format" required>
+              {formats.results.map((f) => (
+                <option value={f.id}>{f.name} · {f.width}×{f.height}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>Title — *word* renders red</span>
+            <input type="text" name="title" value={bundle.project.title ?? ''} /></label>
+          <label class="field"><span>Kicker (label above) — usually not with a tagline</span>
+            <input type="text" name="kicker" value={bundle.project.kicker ?? ''} /></label>
+          <label class="field"><span>Tagline (sentence below)</span>
+            <input type="text" name="tagline" value={bundle.project.tagline ?? ''} /></label>
+        </div>
+        <button class="btn" type="submit">Render design · $0.00</button>
+      </form>
+    )
+  }
+
+  <div class="designs-grid">
+    {
+      designs.results.map((d) => (
+        <figure class="design-card">
+          <a href={`/img/${d.r2_key}`} target="_blank">
+            <img src={`/img/${d.thumb_key}`} alt={d.format_name} loading="lazy" />
+          </a>
+          <figcaption>
+            <span>{d.layout_name}</span>
+            <span class="mono faint">{d.format_slug} · {d.width}×{d.height}</span>
+            <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`}>
+              Download
+            </a>
+          </figcaption>
+        </figure>
+      ))
+    }
+  </div>
+</Base>
+
+<style>
+  .design-form { margin-bottom: 2rem; }
+  .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
+  .form-grid > * { min-width: 0; }
+  .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); gap: 1rem; }
+  .designs-grid > * { min-width: 0; }
+  .design-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .design-card img { display: block; width: 100%; height: auto; }
+  figcaption { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.7rem; font-size: 0.8rem; flex-wrap: wrap; }
+  .faint { color: var(--faint); }
+  figcaption .btn { margin-left: auto; }
+</style>

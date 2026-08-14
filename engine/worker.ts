@@ -11,6 +11,9 @@ import { Container, getContainer } from '@cloudflare/containers';
 
 interface EngineEnv {
   ENGINE_CONTAINER: DurableObjectNamespace<EngineContainer>;
+  /** Bump in wrangler.jsonc on image changes: a fresh named instance starts a fresh
+   *  container on the LATEST image, instead of waiting out the old one's sleep. */
+  INSTANCE_NAME: string;
   REPLICATE_API_TOKEN: string;
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
@@ -42,8 +45,8 @@ export class EngineContainer extends Container<EngineEnv> {
 export default {
   async fetch(request: Request, env: EngineEnv): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === '/run' && request.method === 'POST') {
-      return getContainer(env.ENGINE_CONTAINER, 'main').fetch(request);
+    if ((url.pathname === '/run' || url.pathname === '/render') && request.method === 'POST') {
+      return getContainer(env.ENGINE_CONTAINER, env.INSTANCE_NAME ?? 'main').fetch(request);
     }
     return new Response('not found', { status: 404 });
   },

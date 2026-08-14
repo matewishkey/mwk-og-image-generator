@@ -10,6 +10,7 @@
  * Both carry `x-seam-ts` (unix seconds) and `x-seam-sig` = HMAC-SHA256(secret, `${ts}.${body}`).
  */
 
+import { z } from 'zod';
 import type { Style } from './style.ts';
 
 export interface SeamIdea {
@@ -39,6 +40,57 @@ export interface EngineRunRequest {
   concurrency?: number;
 }
 
+/**
+ * A layout is DATA. A model can write one, a human can tweak one, and the engine
+ * renders either for $0.00. Proven by the 20-variant prototype (2026-08-14).
+ */
+export const LayoutConfigSchema = z.object({
+  archetype: z.enum(['hero', 'diptych', 'stack', 'triptych', 'mosaic', 'quad', 'filmstrip']),
+  seam: z.enum(['butt', 'hairline', 'feather']).default('feather'),
+  /** Feather width in px at 1200 canvas width; scaled with the canvas. */
+  feather: z.number().int().min(20).max(600).optional(),
+  lockup: z.enum(['bottom', 'top', 'corner', 'inset', 'rail', 'none']).default('bottom'),
+  /** Draw each panel's label chip. Pointless on single-panel layouts. */
+  labels: z.boolean().default(true),
+  /** Panel order: indexes into the inventory. Extra entries are ignored. */
+  order: z.array(z.number().int().min(0)).optional(),
+  treats: z.array(z.enum(['none', 'desaturate', 'dim', 'tint']).nullable()).optional(),
+  crop: z.enum(['attention', 'entropy', 'centre']).default('attention'),
+});
+export type LayoutConfig = z.infer<typeof LayoutConfigSchema>;
+
+/** Panels a given archetype needs. The UI must not offer a triptych to two picks. */
+export const ARCHETYPE_PANELS: Record<LayoutConfig['archetype'], number> = {
+  hero: 1,
+  diptych: 2,
+  stack: 2,
+  triptych: 3,
+  mosaic: 3,
+  quad: 4,
+  filmstrip: 4,
+};
+
+export interface EngineRenderRequest {
+  designId: string;
+  /** R2 keys the finished design is written to. */
+  outKey: string;
+  thumbKey: string;
+  width: number;
+  height: number;
+  layout: LayoutConfig;
+  /** The brand kit's config JSON — exactly the BrandConfig shape brand.ts reads. */
+  brand: unknown;
+  text: { title?: string; kicker?: string; tagline?: string };
+  /** R2 art keys (never card keys — a band per panel looks absurd), inventory order. */
+  panels: { key: string; label?: string }[];
+}
+
+export interface EngineRenderResponse {
+  ok: true;
+  width: number;
+  height: number;
+}
+
 export type EngineEvent =
   | { kind: 'run-started'; runId: string; total: number; estimatedUsd: number }
   | {
@@ -58,6 +110,7 @@ export type EngineEvent =
       error?: string;
       artKey?: string;
       cardKey?: string;
+      thumbKey?: string;
       width?: number;
       height?: number;
     }
