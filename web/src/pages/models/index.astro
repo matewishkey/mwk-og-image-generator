@@ -1,0 +1,78 @@
+---
+import Base from '../../layouts/Base.astro';
+import { MODELS, PRICES_VERIFIED_ON } from '../../../../src/models.ts';
+
+const imageModels = MODELS.filter((m) => m.modality === 'image');
+const videoModels = MODELS.filter((m) => m.modality === 'video');
+---
+
+<Base title="Models" nav="models">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>Library</p>
+    <h1>Models</h1>
+    <p class="sub">
+      Every slug, field name and price was read off the model's own Replicate page, not
+      guessed. Prices last verified <span class="mono">{PRICES_VERIFIED_ON}</span>.
+    </p>
+  </div>
+
+  <h2>Stills</h2>
+  <div class="model-table" role="table">
+    {
+      imageModels.map((m) => (
+        <div class="model-row card">
+          <div class="m-id">
+            <span class="mono alias">{m.alias}</span>
+            <span class="label">{m.label}</span>
+            <span class="mono faint">{m.id}</span>
+          </div>
+          <div class="m-price mono">
+            {m.tiers.map((t) => (
+              <span>{t}: ${m.priceUsd[t]}</span>
+            ))}
+          </div>
+          <div class="m-refs mono faint">
+            {m.refStyle === 'none' ? 'no refs' : `${m.refStyle} · max ${m.maxRefs}`}
+            {m.seedable ? ' · seed' : ''}
+          </div>
+          <p class="m-notes">{m.notes}</p>
+        </div>
+      ))
+    }
+  </div>
+
+  <h2>Video — phase 2, listed for the record</h2>
+  <div class="model-table">
+    {
+      videoModels.map((m) => (
+        <div class="model-row card dimmed">
+          <div class="m-id">
+            <span class="mono alias">{m.alias}</span>
+            <span class="label">{m.label}</span>
+            <span class="mono faint">{m.id}</span>
+          </div>
+          <div class="m-price mono">
+            {m.tiers.map((t) => (
+              <span>{t}: ${m.priceUsd[t]}{m.priceUnit === 'second' ? '/s' : ''}</span>
+            ))}
+          </div>
+          <div class="m-refs mono faint">{m.audio ? 'audio' : 'silent'}</div>
+          <p class="m-notes">{m.notes}</p>
+        </div>
+      ))
+    }
+  </div>
+</Base>
+
+<style>
+  h2 { font-size: 1.25rem; margin: 1.6rem 0 1rem; }
+  .model-row { margin-bottom: 0.8rem; }
+  .model-row.dimmed { opacity: 0.65; }
+  .m-id { display: flex; gap: 0.8rem; align-items: baseline; flex-wrap: wrap; }
+  .alias { font-weight: 700; color: var(--accent); }
+  .label { font-weight: 700; }
+  .faint { color: var(--faint); font-size: 0.8rem; }
+  .m-price { display: flex; gap: 1rem; font-size: 0.82rem; color: var(--mute); margin: 0.4rem 0; flex-wrap: wrap; }
+  .m-refs { font-size: 0.78rem; margin-bottom: 0.4rem; }
+  .m-notes { color: var(--mute); font-size: 0.88rem; max-width: var(--measure); }
+</style>

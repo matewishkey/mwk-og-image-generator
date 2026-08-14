@@ -5,6 +5,8 @@ import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import { createDesign } from '../../../lib/design';
 import { ARCHETYPE_PANELS, LayoutConfigSchema } from '../../../../../src/seam.ts';
+import { generateLayouts } from '../../../lib/generate';
+import { ulid } from '../../../lib/ulid';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -46,8 +48,71 @@ const usable = layouts.results.filter((l) => {
 });
 
 let error = '';
+let genNote = Astro.url.searchParams.get('gen') ?? '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? 'render');
+
+  if (action === 'generate' && picks.results.length > 0) {
+    try {
+      const formatId = String(form.get('format') ?? 'fmt_og');
+      const format = formats.results.find((f) => f.id === formatId) ?? formats.results[0]!;
+      const fmtRow = await env.DB.prepare(`SELECT name, width, height, safe_w, safe_h FROM format WHERE id = ?1`)
+        .bind(format.id)
+        .first<{ name: string; width: number; height: number; safe_w: number | null; safe_h: number | null }>();
+      const n = Math.max(2, Math.min(20, Number(form.get('n') ?? 8)));
+      const brief = String(form.get('brief') ?? '').trim();
+      const { layouts: generated, dropped } = await generateLayouts(
+        env,
+        {
+          panels: picks.results.map((pk) => ({
+            label: pk.label ?? `shot ${pk.position}`,
+            width: null,
+            height: null,
+          })),
+          format: fmtRow!,
+        },
+        brief,
+        n,
+      );
+      const nowIso = new Date().toISOString();
+      let rendered = 0;
+      for (const g of generated) {
+        const layoutId = ulid();
+        await env.DB.prepare(
+          `INSERT INTO layout (id, team_id, slug, name, config, brief, generated_by, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'openai/gpt-5.6-terra', ?7, ?7)`,
+        )
+          .bind(layoutId, team.id, `gen-${layoutId.slice(-8).toLowerCase()}`, g.name,
+                JSON.stringify(g.config), brief || null, nowIso)
+          .run();
+        try {
+          await createDesign(env, {
+            teamId: team.id,
+            userId: user.id,
+            projectId: bundle.project.id,
+            layoutId,
+            formatId: format.id,
+            brandKitId: bundle.project.brand_kit_id,
+            title: bundle.project.title ?? undefined,
+            kicker: bundle.project.kicker ?? undefined,
+            tagline: bundle.project.tagline ?? undefined,
+            panels: picks.results.map((pk) => ({
+              takeId: pk.take_id,
+              artKey: pk.art_key,
+              label: pk.label ?? undefined,
+            })),
+          });
+          rendered++;
+        } catch {
+          /* a config the renderer rejects is dropped, not shown */
+        }
+      }
+      return Astro.redirect(`/projects/${slug}/design?gen=${rendered}+rendered,+${dropped + (generated.length - rendered)}+dropped`);
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  } else
   try {
     await createDesign(env, {
       teamId: team.id,
@@ -108,6 +173,7 @@ const designs = await env.DB.prepare(
   <ProjectTabs slug={slug} active="design" />
 
   {error && <p class="flash">{error}</p>}
+  {genNote && <p class="flash">{genNote} — every render was $0.00. Keep the good ones, ignore the rest.</p>}
 
   {
     picks.results.length === 0 ? (
@@ -148,6 +214,39 @@ const designs = await env.DB.prepare(
             <input type="text" name="tagline" value={bundle.project.tagline ?? ''} /></label>
         </div>
         <button class="btn" type="submit">Render design · $0.00</button>
+      </form>
+    )
+  }
+
+  {
+    picks.results.length > 0 && (
+      <form method="post" class="design-form card generate-form">
+        <input type="hidden" name="action" value="generate" />
+        <p class="inventory mono">Or let the model propose arrangements — it writes configs, the renderer draws them.</p>
+        <div class="form-grid">
+          <label class="field">
+            <span>Direction (optional)</span>
+            <input type="text" name="brief" placeholder="e.g. make the launch the hero, keep it calm" />
+          </label>
+          <label class="field" style="max-width:10rem">
+            <span>How many</span>
+            <select name="n">
+              <option value="4">4</option>
+              <option value="8" selected>8</option>
+              <option value="12">12</option>
+              <option value="20">20</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Format</span>
+            <select name="format">
+              {formats.results.map((f) => (
+                <option value={f.id}>{f.name} · {f.width}×{f.height}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <button class="btn ghost" type="submit">Generate layouts · under a cent</button>
       </form>
     )
   }

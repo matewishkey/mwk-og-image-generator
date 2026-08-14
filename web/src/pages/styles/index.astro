@@ -1,0 +1,141 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
+import { ulid } from '../../lib/ulid';
+import { askEngine, extractJsonArray } from '../../lib/generate';
+import { BRAINSTORM_SYSTEM, brainstormPrompt, parseBrainstorm } from '../../../../src/prompt.ts';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+let error = '';
+let note = '';
+
+const listStyles = () =>
+  env.DB.prepare(
+    `SELECT s.id, s.slug, s.name, s.description, s.look, s.origin, t.kind AS team_kind
+       FROM style s JOIN team t ON t.id = s.team_id
+      WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
+      ORDER BY t.kind DESC, s.name`,
+  )
+    .bind(team.id)
+    .all<{ id: string; slug: string; name: string; description: string; look: string; origin: string; team_kind: string }>();
+
+let styles = await listStyles();
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const nowIso = new Date().toISOString();
+
+  if (action === 'brainstorm') {
+    const idea = String(form.get('idea') ?? '').trim();
+    const n = Math.max(2, Math.min(8, Number(form.get('n') ?? 4)));
+    if (idea) {
+      try {
+        // The same helpers the CLI's brainstorm command uses — reused, not rewritten.
+        const raw = await askEngine(env, {
+          system: BRAINSTORM_SYSTEM,
+          prompt: brainstormPrompt(idea, n, styles.results.map((s) => s.name)),
+        });
+        const parsed = parseBrainstorm(raw, 'openai/gpt-5.6-terra');
+        let saved = 0;
+        for (const s of parsed) {
+          try {
+            await env.DB.prepare(
+              `INSERT INTO style (id, team_id, slug, name, description, look, subject, avoid,
+                 tags, origin, created_at, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)`,
+            )
+              .bind(ulid(), team.id, s.slug, s.name, s.description, s.look, s.subject, s.avoid,
+                    JSON.stringify(s.tags), s.origin, nowIso)
+              .run();
+            saved++;
+          } catch {
+            /* slug collision within the team: skip rather than fail the batch */
+          }
+        }
+        note = `${saved} new style${saved === 1 ? '' : 's'} saved to your library.`;
+      } catch (e) {
+        error = (e as Error).message;
+      }
+    }
+  } else if (action === 'duplicate') {
+    const src = styles.results.find((s) => s.id === String(form.get('style')));
+    if (src) {
+      const full = await env.DB.prepare(`SELECT * FROM style WHERE id = ?1`).bind(src.id).first<Record<string, unknown>>();
+      if (full) {
+        try {
+          await env.DB.prepare(
+            `INSERT INTO style (id, team_id, slug, name, description, look, subject, avoid,
+               tags, origin, forked_from_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)`,
+          )
+            .bind(ulid(), team.id, `${full.slug}-copy`, `${full.name} (copy)`, full.description,
+                  full.look, full.subject, full.avoid, full.tags, full.origin, full.id, nowIso)
+            .run();
+          note = `Duplicated "${full.name}" into your library.`;
+        } catch (e) {
+          error = /UNIQUE/.test((e as Error).message) ? 'A copy already exists.' : (e as Error).message;
+        }
+      }
+    }
+  }
+  styles = await listStyles();
+}
+---
+
+<Base title="Styles" nav="styles">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>Library</p>
+    <h1>Styles</h1>
+    <p class="sub">
+      A style is a look — never a subject, never a scene. House styles are read-only;
+      duplicate one to make it yours.
+    </p>
+  </div>
+
+  {error && <p class="flash">{error}</p>}
+  {note && <p class="flash">{note}</p>}
+
+  <form method="post" class="card brainstorm">
+    <input type="hidden" name="action" value="brainstorm" />
+    <p class="inventory mono">Brainstorm new styles — the same loop the CLI uses, under a cent.</p>
+    <div class="row">
+      <label class="field" style="flex:1"><span>The register — funny, technical, dramatic…</span>
+        <input type="text" name="idea" required placeholder="e.g. dry corporate absurdism for AI-tooling posts" /></label>
+      <label class="field" style="max-width:7rem"><span>How many</span>
+        <select name="n"><option>2</option><option selected>4</option><option>6</option><option>8</option></select></label>
+    </div>
+    <button class="btn ghost" type="submit">Brainstorm</button>
+  </form>
+
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(24rem,1fr))">
+    {
+      styles.results.map((s) => (
+        <div class="card style-card">
+          <p class="kicker">
+            <span class="g">/</span>{s.team_kind === 'house' ? 'house' : s.origin === 'hand' ? 'yours' : 'generated'}
+          </p>
+          <h2>{s.name}</h2>
+          <p class="sub">{s.description}</p>
+          <p class="look">{s.look.slice(0, 180)}{s.look.length > 180 ? '…' : ''}</p>
+          <form method="post">
+            <input type="hidden" name="action" value="duplicate" />
+            <input type="hidden" name="style" value={s.id} />
+            <button class="btn small ghost" type="submit">Duplicate</button>
+          </form>
+        </div>
+      ))
+    }
+  </div>
+</Base>
+
+<style>
+  .brainstorm { margin-bottom: 2rem; }
+  .brainstorm .row { display: flex; gap: 1rem; }
+  .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
+  .style-card h2 { font-size: 1.1rem; margin: 0.3rem 0; }
+  .style-card .look { color: var(--faint); font-size: 0.85rem; margin: 0.6rem 0 0.8rem; }
+</style>

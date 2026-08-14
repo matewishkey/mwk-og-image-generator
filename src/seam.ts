@@ -91,6 +91,18 @@ export interface EngineRenderResponse {
   height: number;
 }
 
+export interface EngineGenerateRequest {
+  prompt: string;
+  system?: string;
+  /** R2 keys of images the model should look at (sent as data URIs). */
+  imageKeys?: string[];
+}
+
+export interface EngineGenerateResponse {
+  ok: true;
+  text: string;
+}
+
 export type EngineEvent =
   | { kind: 'run-started'; runId: string; total: number; estimatedUsd: number }
   | {

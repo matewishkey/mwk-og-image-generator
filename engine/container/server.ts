@@ -20,9 +20,11 @@ import {
   seamHeaders,
   seamVerify,
   type EngineEvent,
+  type EngineGenerateRequest,
   type EngineRenderRequest,
   type EngineRunRequest,
 } from '../../src/seam.ts';
+import { runText } from '../../src/replicate.ts';
 import { loadBrand, type BrandConfig } from '../../src/brand.ts';
 import { renderDesign } from './layout.ts';
 
@@ -210,7 +212,7 @@ const server = createServer((req, res) => {
         res.writeHead(200).end('ok');
         return;
       }
-      if (req.method !== 'POST' || (req.url !== '/run' && req.url !== '/render')) {
+      if (req.method !== 'POST' || !['/run', '/render', '/generate'].includes(req.url ?? '')) {
         res.writeHead(404).end('not found');
         return;
       }
@@ -220,6 +222,25 @@ const server = createServer((req, res) => {
       };
       if (!(await seamVerify(SEAM_SECRET, headers, body))) {
         res.writeHead(401).end('bad signature');
+        return;
+      }
+      if (req.url === '/generate') {
+        // The knobs are pinned on purpose — an upstream default is not a promise
+        // (see PROMPT_FIDELITY in models.ts). Same pins as the CLI's brainstorm.
+        const g = JSON.parse(body) as EngineGenerateRequest;
+        const images: string[] = [];
+        for (const key of g.imageKeys ?? []) {
+          images.push(`data:image/png;base64,${(await r2Get(key)).toString('base64')}`);
+        }
+        const text = await runText('openai/gpt-5.6-terra', {
+          prompt: g.prompt,
+          ...(g.system ? { system_prompt: g.system } : {}),
+          ...(images.length ? { image_input: images } : {}),
+          reasoning_effort: 'low',
+          verbosity: 'medium',
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, text }));
         return;
       }
       if (req.url === '/render') {

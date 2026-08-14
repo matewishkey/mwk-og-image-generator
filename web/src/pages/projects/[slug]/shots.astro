@@ -5,6 +5,7 @@ import { ENV } from '../../../lib/runtime';
 import { ulid } from '../../../lib/ulid';
 import { loadProject } from '../../../lib/data';
 import { createRun, estimateMicros, microsToUsd } from '../../../lib/runs';
+import { suggestShotVariants } from '../../../lib/generate';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -16,6 +17,8 @@ let bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
 
 let error = '';
+let suggestFor = '';
+let suggestions: string[] = [];
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.get('action') ?? '');
@@ -53,6 +56,22 @@ if (Astro.request.method === 'POST') {
     const shotId = String(form.get('shot') ?? '');
     if (bundle.shots.some((s) => s.id === shotId)) {
       await env.DB.prepare(`UPDATE shot SET deleted_at=?1 WHERE id=?2`).bind(now, shotId).run();
+    }
+  } else if (action === 'suggest') {
+    const shotId = String(form.get('shot') ?? '');
+    const shot = bundle.shots.find((s) => s.id === shotId);
+    if (shot) {
+      try {
+        suggestFor = shot.id;
+        suggestions = await suggestShotVariants(env, {
+          current: shot.prompt,
+          projectName: bundle.project.name,
+          otherShots: bundle.shots.filter((s) => s.id !== shot.id).map((s) => s.prompt),
+          n: 4,
+        });
+      } catch (e) {
+        error = `The co-writer failed: ${(e as Error).message}`;
+      }
     }
   } else if (action === 'run') {
     if (!bundle.shots.length) error = 'Add at least one shot first.';
@@ -101,7 +120,7 @@ const estimate = estimateMicros(
 
   {
     bundle.shots.map((s) => (
-      <details class="card shot-card">
+      <details class="card shot-card" open={suggestFor === s.id}>
         <summary>
           <span class="mono shot-pos">{s.position}</span>
           <b>{s.label ?? `Shot ${s.position}`}</b>
@@ -115,10 +134,26 @@ const estimate = estimateMicros(
             <textarea name="prompt">{s.prompt}</textarea></label>
           <div class="row">
             <button class="btn small" type="submit">Save</button>
+            <button class="btn small ghost" type="submit" name="action" value="suggest">Co-write 4 variants</button>
             <button class="btn small ghost" type="submit" name="action" value="delete-shot"
               onclick="return confirm('Delete this shot?')">Delete</button>
           </div>
         </form>
+        {suggestFor === s.id && suggestions.length > 0 && (
+          <div class="suggestions">
+            <p class="kicker"><span class="g">/</span>Co-writer — pick one or steal a line</p>
+            {suggestions.map((v) => (
+              <form method="post" class="suggestion">
+                <input type="hidden" name="action" value="edit-shot" />
+                <input type="hidden" name="shot" value={s.id} />
+                <input type="hidden" name="label" value={s.label ?? ''} />
+                <input type="hidden" name="prompt" value={v} />
+                <p>{v}</p>
+                <button class="btn small" type="submit">Use this</button>
+              </form>
+            ))}
+          </div>
+        )}
       </details>
     ))
   }
@@ -143,6 +178,11 @@ const estimate = estimateMicros(
 
 <style>
   .shot-card summary { display: flex; align-items: baseline; gap: 0.7rem; cursor: pointer; }
+  .suggestions { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
+  .suggestions .kicker { margin-bottom: 0.7rem; }
+  .suggestion { display: flex; gap: 1rem; align-items: flex-start; margin-bottom: 0.8rem; }
+  .suggestion p { flex: 1; color: var(--mute); font-size: 0.92rem; }
+  .suggestion .btn { flex: none; }
   .shot-pos { color: var(--faint); font-weight: 700; }
   .shot-preview { color: var(--mute); font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .shot-edit, .add-shot form { margin-top: 1rem; }

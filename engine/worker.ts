@@ -45,7 +45,7 @@ export class EngineContainer extends Container<EngineEnv> {
 export default {
   async fetch(request: Request, env: EngineEnv): Promise<Response> {
     const url = new URL(request.url);
-    if ((url.pathname === '/run' || url.pathname === '/render') && request.method === 'POST') {
+    if (['/run', '/render', '/generate'].includes(url.pathname) && request.method === 'POST') {
       return getContainer(env.ENGINE_CONTAINER, env.INSTANCE_NAME ?? 'main').fetch(request);
     }
     return new Response('not found', { status: 404 });

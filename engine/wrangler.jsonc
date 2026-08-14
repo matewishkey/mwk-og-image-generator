@@ -10,7 +10,7 @@
       "class_name": "EngineContainer",
       "image": "./Dockerfile",
       "image_build_context": "..",
-      "max_instances": 1,
+      "max_instances": 2,
       "instance_type": "basic"
     }
   ],
@@ -19,7 +19,7 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EngineContainer"] }],
   "vars": {
-    "INSTANCE_NAME": "main-2",
+    "INSTANCE_NAME": "main-3",
     "R2_ENDPOINT": "https://ef7d622089ca4480c9f6fbf368f66787.r2.cloudflarestorage.com",
     "R2_BUCKET": "mwk-studio",
     "EVENTS_URL": "https://og.matewishkey.com/internal/events"
