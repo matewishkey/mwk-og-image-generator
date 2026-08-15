@@ -1,0 +1,93 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
+import { loadPack } from '../../lib/pack';
+
+const token = Astro.params.token!;
+const pack = await loadPack(ENV, token);
+if (!pack) return new Response('not found', { status: 404 });
+---
+
+<Base title={`${pack.project.name} · pack`}>
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>Concept pack</p>
+    <h1>{pack.project.name}</h1>
+    <p class="sub">{pack.project.description}</p>
+    <p class="mono machine">
+      Machine-readable: <a href={`/pack/${token}.json`}>{`/pack/${token.slice(0, 8)}….json`}</a>
+    </p>
+  </div>
+
+  <section class="pk">
+    <h2>Brand words</h2>
+    <p>
+      {pack.brand.title && <span class="mono">title: {pack.brand.title}</span>}
+      {pack.brand.kicker && <span class="mono"> · kicker: {pack.brand.kicker}</span>}
+      {pack.brand.tagline && <span class="mono"> · tagline: {pack.brand.tagline}</span>}
+    </p>
+  </section>
+
+  <section class="pk">
+    <h2>Style — {pack.style.name}</h2>
+    <p class="sub">{pack.style.description}</p>
+    <p><b>Look:</b> {pack.style.look}</p>
+    {pack.style.subject && <p><b>Subject:</b> {pack.style.subject}</p>}
+    {pack.style.avoid && <p><b>Avoid:</b> {pack.style.avoid}</p>}
+  </section>
+
+  {
+    pack.references.length > 0 && (
+      <section class="pk">
+        <h2>Reference photos{pack.refRole ? ` — reference person: ${pack.refRole}` : ''}</h2>
+        <div class="strip">
+          {pack.references.map((r) => (
+            <img src={r.url} alt={r.filename} loading="lazy" />
+          ))}
+        </div>
+      </section>
+    )
+  }
+
+  <section class="pk">
+    <h2>Shots</h2>
+    {
+      pack.shots.map((s) => (
+        <div class="shot">
+          <p>
+            <b>{s.position}. {s.label ?? `Shot ${s.position}`}</b> — {s.prompt}
+          </p>
+          {s.pick && <img src={s.pick.url} alt={s.label ?? ''} loading="lazy" class="pick-img" />}
+        </div>
+      ))
+    }
+  </section>
+
+  <section class="pk">
+    <h2>Finished designs</h2>
+    <div class="designs">
+      {
+        pack.designs.map((d) => (
+          <figure>
+            <a href={d.url}><img src={d.url} alt={`${d.layout} ${d.format}`} loading="lazy" /></a>
+            <figcaption class="mono faint">{d.layout} · {d.format} · {d.width}×{d.height}</figcaption>
+          </figure>
+        ))
+      }
+    </div>
+  </section>
+</Base>
+
+<style>
+  .machine { font-size: 0.8rem; margin-top: 0.5rem; }
+  .pk { margin-bottom: 2.2rem; max-width: 72rem; }
+  .pk h2 { font-size: 1.25rem; margin-bottom: 0.7rem; }
+  .pk p { margin-bottom: 0.4rem; max-width: var(--measure); }
+  .strip { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+  .strip img { height: 8rem; border-radius: var(--radius); border: 1px solid var(--line); }
+  .shot { margin-bottom: 1.2rem; }
+  .pick-img { max-width: 26rem; width: 100%; border-radius: var(--radius); border: 1px solid var(--line); margin-top: 0.4rem; }
+  .designs { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 1rem; }
+  .designs > * { min-width: 0; }
+  .designs img { width: 100%; border-radius: var(--radius); border: 1px solid var(--line); display: block; }
+  .designs figcaption { font-size: 0.72rem; margin-top: 0.3rem; color: var(--faint); }
+</style>

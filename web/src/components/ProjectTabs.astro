@@ -1,13 +1,14 @@
 ---
 interface Props {
   slug: string;
-  active: 'shots' | 'takes' | 'design';
+  active: 'shots' | 'takes' | 'design' | 'settings';
 }
 const { slug, active } = Astro.props;
 const tabs = [
   { id: 'shots', label: 'Shots' },
   { id: 'takes', label: 'Takes' },
   { id: 'design', label: 'Design' },
+  { id: 'settings', label: 'Settings' },
 ] as const;
 ---
 

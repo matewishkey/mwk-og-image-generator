@@ -1,0 +1,146 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ProjectTabs from '../../../components/ProjectTabs.astro';
+import { ENV } from '../../../lib/runtime';
+import { loadProject } from '../../../lib/data';
+import { MODELS } from '../../../../../src/models.ts';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+let bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+
+const styles = await env.DB.prepare(
+  `SELECT s.id, s.name, t.kind AS team_kind FROM style s JOIN team t ON t.id = s.team_id
+    WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
+    ORDER BY t.kind DESC, s.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; name: string; team_kind: string }>();
+
+const imageModels = MODELS.filter((m) => m.modality === 'image');
+
+let error = '';
+let note = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const name = String(form.get('name') ?? '').trim();
+  const styleId = String(form.get('style') ?? '');
+  const models = form.getAll('models').map(String);
+  const iterations = Math.max(1, Math.min(8, Number(form.get('iterations') ?? 1)));
+
+  if (!name) error = 'A project needs a name.';
+  else if (!models.length) error = 'Pick at least one model.';
+  else if (!styles.results.some((s) => s.id === styleId)) error = 'Pick a style.';
+  else {
+    await env.DB.prepare(
+      `UPDATE project SET name=?1, description=?2, default_style_id=?3, models=?4,
+         iterations=?5, allow_text=?6, extra=?7, title=?8, kicker=?9, tagline=?10,
+         version=version+1, updated_at=?11
+       WHERE id=?12`,
+    )
+      .bind(
+        name,
+        String(form.get('description') ?? '').trim(),
+        styleId,
+        JSON.stringify(models),
+        iterations,
+        form.get('allow_text') ? 1 : 0,
+        String(form.get('extra') ?? '').trim() || null,
+        String(form.get('title') ?? '').trim() || null,
+        String(form.get('kicker') ?? '').trim() || null,
+        String(form.get('tagline') ?? '').trim() || null,
+        new Date().toISOString(),
+        bundle.project.id,
+      )
+      .run();
+    note = 'Saved. The next run uses these settings; past takes are untouched.';
+    bundle = (await loadProject(env, team.id, slug))!;
+  }
+}
+
+const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
+---
+
+<Base title={`${bundle.project.name} · settings`} nav="projects">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
+    <h1>Settings</h1>
+    <p class="sub">Changing settings never touches what has already run — history stays history.</p>
+  </div>
+
+  <ProjectTabs slug={slug} active="settings" />
+
+  {error && <p class="flash">{error}</p>}
+  {note && <p class="flash">{note}</p>}
+
+  <form method="post" class="settings-form">
+    <div class="form-grid">
+      <label class="field"><span>Name</span>
+        <input type="text" name="name" value={bundle.project.name} required /></label>
+      <label class="field"><span>Description</span>
+        <input type="text" name="description" value={bundle.project.description} /></label>
+    </div>
+    <label class="field"><span>Default style — a run renders every shot through this</span>
+      <select name="style">
+        {styles.results.map((s) => (
+          <option value={s.id} selected={s.id === bundle.project.default_style_id}>
+            {s.name} {s.team_kind === 'house' ? '· house' : ''}
+          </option>
+        ))}
+      </select></label>
+    <fieldset class="field">
+      <span>Models</span>
+      <div class="model-grid">
+        {imageModels.map((m) => (
+          <label class="model-pick">
+            <input type="checkbox" name="models" value={m.alias} checked={chosenModels.has(m.alias)} />
+            <span class="mono">{m.alias}</span>
+            <span class="money">${m.priceUsd[m.tiers[0]!]}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+    <div class="form-grid">
+      <label class="field" style="max-width:8rem"><span>Iterations</span>
+        <input type="number" name="iterations" value={bundle.project.iterations} min="1" max="8" /></label>
+      <label class="field checkbox-field">
+        <span>Text in pictures</span>
+        <label class="inline-check">
+          <input type="checkbox" name="allow_text" checked={bundle.project.allow_text === 1} />
+          allow the models to draw text
+        </label>
+      </label>
+    </div>
+    <label class="field"><span>Extra instruction appended to every prompt (optional)</span>
+      <input type="text" name="extra" value={bundle.project.extra ?? ''} /></label>
+    <div class="form-grid">
+      <label class="field"><span>Band title — *word* renders red</span>
+        <input type="text" name="title" value={bundle.project.title ?? ''} /></label>
+      <label class="field"><span>Kicker</span>
+        <input type="text" name="kicker" value={bundle.project.kicker ?? ''} /></label>
+      <label class="field"><span>Tagline</span>
+        <input type="text" name="tagline" value={bundle.project.tagline ?? ''} /></label>
+    </div>
+    <button class="btn" type="submit">Save settings</button>
+  </form>
+</Base>
+
+<style>
+  .settings-form { max-width: 52rem; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
+  .form-grid > * { min-width: 0; }
+  fieldset { border: 0; }
+  .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.5rem; }
+  .model-grid > * { min-width: 0; }
+  .model-pick {
+    display: flex; align-items: center; gap: 0.5rem;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 0.5rem 0.7rem; cursor: pointer;
+  }
+  .model-pick:has(input:checked) { border-color: var(--accent); }
+  .inline-check { display: flex; gap: 0.5rem; align-items: center; color: var(--mute); font-size: 0.92rem; padding-top: 0.4rem; }
+</style>

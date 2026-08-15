@@ -4,9 +4,12 @@ import { ENV } from '../../lib/runtime';
 import { ulid } from '../../lib/ulid';
 import { askEngine, extractJsonArray } from '../../lib/generate';
 import { BRAINSTORM_SYSTEM, brainstormPrompt, parseBrainstorm } from '../../../../src/prompt.ts';
+import { runProofs } from '../../lib/proofs';
+import type { StyleRow } from '../../lib/runs';
 
 const env = ENV;
 const team = Astro.locals.team;
+const user = Astro.locals.user!;
 if (!team) return new Response('No team', { status: 403 });
 
 let error = '';
@@ -41,22 +44,38 @@ if (Astro.request.method === 'POST') {
         });
         const parsed = parseBrainstorm(raw, 'openai/gpt-5.6-terra');
         let saved = 0;
+        const savedIds: string[] = [];
         for (const s of parsed) {
+          const styleId = ulid();
           try {
             await env.DB.prepare(
               `INSERT INTO style (id, team_id, slug, name, description, look, subject, avoid,
                  tags, origin, created_at, updated_at)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)`,
             )
-              .bind(ulid(), team.id, s.slug, s.name, s.description, s.look, s.subject, s.avoid,
+              .bind(styleId, team.id, s.slug, s.name, s.description, s.look, s.subject, s.avoid,
                     JSON.stringify(s.tags), s.origin, nowIso)
               .run();
             saved++;
+            savedIds.push(styleId);
           } catch {
             /* slug collision within the team: skip rather than fail the batch */
           }
         }
-        note = `${saved} new style${saved === 1 ? '' : 's'} saved to your library.`;
+        // Proof each new style immediately — you see what's coming before you commit to it.
+        for (const styleId of savedIds) {
+          const row = await env.DB.prepare(`SELECT * FROM style WHERE id = ?1`)
+            .bind(styleId)
+            .first<StyleRow>();
+          if (row) {
+            try {
+              await runProofs(env, { teamId: team.id, userId: user.id, style: row });
+            } catch (e) {
+              error = `proofing failed: ${(e as Error).message}`;
+            }
+          }
+        }
+        note = `${saved} new style${saved === 1 ? '' : 's'} saved — proof sheets are rendering, open a style to watch.`;
       } catch (e) {
         error = (e as Error).message;
       }
@@ -101,7 +120,7 @@ if (Astro.request.method === 'POST') {
 
   <form method="post" class="card brainstorm">
     <input type="hidden" name="action" value="brainstorm" />
-    <p class="inventory mono">Brainstorm new styles — the same loop the CLI uses, under a cent.</p>
+    <p class="inventory mono">Brainstorm new styles + a proof sheet for each (~1½¢ per style, all in the ledger).</p>
     <div class="row">
       <label class="field" style="flex:1"><span>The register — funny, technical, dramatic…</span>
         <input type="text" name="idea" required placeholder="e.g. dry corporate absurdism for AI-tooling posts" /></label>
@@ -118,14 +137,17 @@ if (Astro.request.method === 'POST') {
           <p class="kicker">
             <span class="g">/</span>{s.team_kind === 'house' ? 'house' : s.origin === 'hand' ? 'yours' : 'generated'}
           </p>
-          <h2>{s.name}</h2>
+          <h2><a href={`/styles/${s.id}`}>{s.name}</a></h2>
           <p class="sub">{s.description}</p>
           <p class="look">{s.look.slice(0, 180)}{s.look.length > 180 ? '…' : ''}</p>
-          <form method="post">
-            <input type="hidden" name="action" value="duplicate" />
-            <input type="hidden" name="style" value={s.id} />
-            <button class="btn small ghost" type="submit">Duplicate</button>
-          </form>
+          <div class="row-actions">
+            <a class="btn small ghost" href={`/styles/${s.id}`}>Open</a>
+            <form method="post">
+              <input type="hidden" name="action" value="duplicate" />
+              <input type="hidden" name="style" value={s.id} />
+              <button class="btn small ghost" type="submit">Duplicate</button>
+            </form>
+          </div>
         </div>
       ))
     }
@@ -138,4 +160,6 @@ if (Astro.request.method === 'POST') {
   .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
   .style-card h2 { font-size: 1.1rem; margin: 0.3rem 0; }
   .style-card .look { color: var(--faint); font-size: 0.85rem; margin: 0.6rem 0 0.8rem; }
+  .style-card h2 a { color: var(--ink); }
+  .row-actions { display: flex; gap: 0.5rem; }
 </style>

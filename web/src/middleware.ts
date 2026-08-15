@@ -2,7 +2,7 @@ import { defineMiddleware } from 'astro:middleware';
 import { sha256Hex } from './lib/crypto';
 import { ENV, waitUntil } from './lib/runtime';
 
-const PUBLIC = [/^\/login$/, /^\/auth\//, /^\/internal\//, /^\/fonts\//, /^\/_astro\//, /^\/favicon/];
+const PUBLIC = [/^\/login$/, /^\/auth\//, /^\/internal\//, /^\/pack\//, /^\/fonts\//, /^\/_astro\//, /^\/favicon/];
 
 const SESSION_DAYS = 30;
 

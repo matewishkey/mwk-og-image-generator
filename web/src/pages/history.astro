@@ -98,7 +98,11 @@ const filterQs = (over: Record<string, string>) => {
     page.map((r) => (
       <div class="card run-row">
         <span class={`status ${r.status === 'done' ? 'succeeded' : r.status}`}>{r.status}</span>
-        <a href={`/projects/${r.project_slug}/takes`}><b>{r.project_name}</b></a>
+        {r.project_slug.startsWith('_') ? (
+          <b>{r.project_name}</b>
+        ) : (
+          <a href={`/projects/${r.project_slug}/takes`}><b>{r.project_name}</b></a>
+        )}
         <span class="mono faint">{r.kind}</span>
         <span class="mono faint">{r.ok}/{r.takes} takes</span>
         <a class="mono faint" href={filterQs({ who: r.email })}>{r.user_name ?? r.email}</a>

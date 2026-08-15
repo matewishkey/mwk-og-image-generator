@@ -53,7 +53,54 @@ if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.get('action') ?? 'render');
 
-  if (action === 'generate' && picks.results.length > 0) {
+  if (action === 'pack-link') {
+    // One unguessable token per project; creating it twice keeps the first.
+    const token = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
+    await env.DB.prepare(
+      `UPDATE project SET pack_token = coalesce(pack_token, ?1) WHERE id = ?2`,
+    )
+      .bind(token, bundle.project.id)
+      .run();
+    return Astro.redirect(`/projects/${slug}/design`);
+  } else if (action === 'all-formats') {
+    // Promote one design: same layout, same words, every format — a collection.
+    const src = await env.DB.prepare(
+      `SELECT layout_id, title, kicker, tagline FROM design WHERE id = ?1 AND team_id = ?2 AND project_id = ?3`,
+    )
+      .bind(String(form.get('design') ?? ''), team.id, bundle.project.id)
+      .first<{ layout_id: string; title: string | null; kicker: string | null; tagline: string | null }>();
+    if (src && picks.results.length > 0) {
+      try {
+        const collectionId = ulid();
+        await env.DB.prepare(
+          `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+        )
+          .bind(collectionId, team.id, bundle.project.id, null, user.id, new Date().toISOString())
+          .run();
+        await createCollection(env, {
+          teamId: team.id,
+          userId: user.id,
+          projectId: bundle.project.id,
+          layoutId: src.layout_id,
+          brandKitId: bundle.project.brand_kit_id,
+          title: src.title ?? undefined,
+          kicker: src.kicker ?? undefined,
+          tagline: src.tagline ?? undefined,
+          collectionId,
+          formats: formats.results,
+          panels: picks.results.map((pk) => ({
+            takeId: pk.take_id,
+            artKey: pk.art_key,
+            label: pk.label ?? undefined,
+          })),
+        });
+        return Astro.redirect(`/projects/${slug}/design`);
+      } catch (e) {
+        error = (e as Error).message;
+      }
+    }
+  } else if (action === 'generate' && picks.results.length > 0) {
     try {
       const formatId = String(form.get('format') ?? 'fmt_og');
       const format = formats.results.find((f) => f.id === formatId) ?? formats.results[0]!;
@@ -185,19 +232,11 @@ const designs = await env.DB.prepare(
     format_slug: string;
   }>();
 
-// Group by collection; a design without one is its own group of one.
 type DesignRow = (typeof designs.results)[number];
-const groups: { key: string; items: DesignRow[] }[] = [];
-const byKey = new Map<string, DesignRow[]>();
-for (const d of designs.results) {
-  const key = d.collection_id ?? `single-${d.id}`;
-  if (!byKey.has(key)) {
-    const items: DesignRow[] = [];
-    byKey.set(key, items);
-    groups.push({ key, items });
-  }
-  byKey.get(key)!.push(d);
-}
+const leadId = Astro.url.searchParams.get('lead');
+const lead: DesignRow | undefined =
+  designs.results.find((d) => d.id === leadId) ?? designs.results[0];
+const versions = designs.results.filter((d) => d.id !== lead?.id);
 ---
 
 <Base title={`${bundle.project.name} · design`} nav="projects">
@@ -212,8 +251,52 @@ for (const d of designs.results) {
 
   <ProjectTabs slug={slug} active="design" />
 
+  <p class="pack-bar">
+    {
+      (bundle.project as unknown as { pack_token: string | null }).pack_token ? (
+        <>
+          <span class="kicker"><span class="g">/</span>Pack</span>
+          <a class="mono" href={`/pack/${(bundle.project as unknown as { pack_token: string }).pack_token}`} target="_blank">
+            {`${env.PUBLIC_ORIGIN}/pack/${(bundle.project as unknown as { pack_token: string }).pack_token.slice(0, 10)}…`}
+          </a>
+          <span class="faint">— the whole concept behind one link, for the social generator. Add .json for machines.</span>
+        </>
+      ) : (
+        <form method="post">
+          <input type="hidden" name="action" value="pack-link" />
+          <button class="btn small ghost" type="submit">Create pack link</button>
+        </form>
+      )
+    }
+  </p>
+
   {error && <p class="flash">{error}</p>}
   {genNote && <p class="flash">{genNote} — every render was $0.00. Keep the good ones, ignore the rest.</p>}
+
+  {
+    lead && (
+      <section class="lead">
+        <figure class="lead-card">
+          <a href={`/img/${lead.r2_key}`} target="_blank">
+            <img src={`/img/${lead.r2_key}`} alt={lead.format_name} />
+          </a>
+          <figcaption>
+            <b>{lead.layout_name}</b>
+            <span class="mono faint">{lead.format_slug} · {lead.width}×{lead.height}</span>
+            <span class="lead-actions">
+              <form method="post">
+                <input type="hidden" name="action" value="all-formats" />
+                <input type="hidden" name="design" value={lead.id} />
+                <button class="btn small" type="submit">All {formats.results.length} formats · $0.00</button>
+              </form>
+              <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}>Preview</a>
+              <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}>Download</a>
+            </span>
+          </figcaption>
+        </figure>
+      </section>
+    )
+  }
 
   {
     picks.results.length === 0 ? (
@@ -293,33 +376,25 @@ for (const d of designs.results) {
   }
 
   {
-    groups.map((g) => (
-      <section class="design-group">
-        {g.items.length > 1 && (
-          <h2>
-            {g.items[0]!.layout_name}
-            <span class="mono faint"> · collection of {g.items.length}</span>
-          </h2>
-        )}
+    versions.length > 0 && (
+      <section class="versions">
+        <p class="kicker"><span class="g">/</span>Versions — click one to lead</p>
         <div class="designs-grid">
-          {g.items.map((d) => (
+          {versions.map((d) => (
             <figure class="design-card">
-              <a href={`/img/${d.r2_key}`} target="_blank">
+              <a href={`/projects/${slug}/design?lead=${d.id}`}>
                 <img src={`/img/${d.thumb_key}`} alt={d.format_name} loading="lazy" />
               </a>
               <figcaption>
-                <span>{g.items.length > 1 ? d.format_name : d.layout_name}</span>
-                <span class="mono faint">{d.format_slug} · {d.width}×{d.height}</span>
-                <a class="btn small ghost" href={`/projects/${slug}/preview?design=${d.id}`}>Preview</a>
-                <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`}>
-                  Download
-                </a>
+                <span>{d.layout_name}</span>
+                <span class="mono faint">{d.format_slug}</span>
+                <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`}>↓</a>
               </figcaption>
             </figure>
           ))}
         </div>
       </section>
-    ))
+    )
   }
 </Base>
 
@@ -328,9 +403,15 @@ for (const d of designs.results) {
   .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
   .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
   .form-grid > * { min-width: 0; }
-  .design-group { margin-bottom: 2rem; }
-  .design-group h2 { font-size: 1.1rem; margin-bottom: 0.8rem; }
-  .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); gap: 1rem; }
+  .pack-bar { display: flex; gap: 0.8rem; align-items: baseline; margin-bottom: 1.4rem; flex-wrap: wrap; font-size: 0.85rem; }
+  .pack-bar .faint { color: var(--faint); }
+  .lead { margin-bottom: 2rem; }
+  .lead-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; max-width: 64rem; }
+  .lead-card img { display: block; width: 100%; height: auto; }
+  .lead-card figcaption { display: flex; align-items: center; gap: 0.9rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
+  .lead-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
+  .versions .kicker { margin-bottom: 0.8rem; }
+  .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.9rem; }
   .designs-grid > * { min-width: 0; }
   .design-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
   .design-card img { display: block; width: 100%; height: auto; }

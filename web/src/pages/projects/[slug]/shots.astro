@@ -7,7 +7,7 @@ import { loadProject } from '../../../lib/data';
 import { createRun, estimateMicros, microsToUsd } from '../../../lib/runs';
 import { suggestShotVariants } from '../../../lib/generate';
 import { loadProjectRefs } from '../../../lib/runs';
-import { sniffImage } from '../../../lib/imgsize';
+import { listLibrary, uploadReferences } from '../../../lib/media';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -59,49 +59,29 @@ if (Astro.request.method === 'POST') {
     if (bundle.shots.some((s) => s.id === shotId)) {
       await env.DB.prepare(`UPDATE shot SET deleted_at=?1 WHERE id=?2`).bind(now, shotId).run();
     }
-  } else if (action === 'upload-refs') {
-    const files = form.getAll('photos').filter((f): f is File => f instanceof File && f.size > 0);
+  } else if (action === 'upload-refs' || action === 'attach-ref') {
     const posRow = await env.DB.prepare(
       `SELECT coalesce(max(position), 0) AS p FROM reference_use WHERE owner_type='project' AND owner_id=?1`,
     )
       .bind(bundle.project.id)
       .first<{ p: number }>();
     let pos = posRow?.p ?? 0;
-    for (const file of files) {
-      if (file.size > 12 * 1024 * 1024) {
-        error = `${file.name} is over 12 MB.`;
-        continue;
-      }
-      const bytes = await file.arrayBuffer();
-      const info = sniffImage(bytes);
-      if (!info) {
-        error = `${file.name} is not a PNG, JPEG or WebP.`;
-        continue;
-      }
-      // content-address by the raw digest, hex-encoded
-      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-      const key = `teams/${team.id}/refs/${digest}${info.ext}`;
-      await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: info.mime } });
-      // one photo stored once per team; a duplicate upload reuses the row
+    let attach: string[] = [];
+    if (action === 'upload-refs') {
+      const files = form.getAll('photos').filter((f): f is File => f instanceof File && f.size > 0);
+      const outcome = await uploadReferences(env, team.id, files);
+      error = outcome.errors.join(' ');
+      attach = outcome.ids;
+    } else {
+      attach = [String(form.get('ref') ?? '')].filter(Boolean);
+    }
+    for (const refId of attach) {
       await env.DB.prepare(
-        `INSERT OR IGNORE INTO reference (id, team_id, r2_key, sha256, filename, mime, width, height, bytes, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+        `INSERT OR IGNORE INTO reference_use (reference_id, owner_type, owner_id, position)
+         VALUES (?1, 'project', ?2, ?3)`,
       )
-        .bind(ulid(), team.id, key, digest, file.name, info.mime, info.width, info.height, file.size, now)
+        .bind(refId, bundle.project.id, ++pos)
         .run();
-      const ref = await env.DB.prepare(`SELECT id FROM reference WHERE team_id=?1 AND sha256=?2`)
-        .bind(team.id, digest)
-        .first<{ id: string }>();
-      if (ref) {
-        await env.DB.prepare(
-          `INSERT OR IGNORE INTO reference_use (reference_id, owner_type, owner_id, position)
-           VALUES (?1, 'project', ?2, ?3)`,
-        )
-          .bind(ref.id, bundle.project.id, ++pos)
-          .run();
-      }
     }
   } else if (action === 'remove-ref') {
     await env.DB.prepare(
@@ -161,6 +141,8 @@ const refs = await env.DB.prepare(
   .bind(bundle.project.id)
   .all<{ id: string; r2_key: string; filename: string; width: number | null; height: number | null }>();
 const refInfo = await loadProjectRefs(env, bundle.project.id);
+const attachedIds = new Set(refs.results.map((r) => r.id));
+const library = (await listLibrary(env, team.id)).filter((r) => !attachedIds.has(r.id));
 const estimate = estimateMicros(
   models,
   bundle.project.tier,
@@ -261,6 +243,28 @@ const estimate = estimateMicros(
       <button class="btn small" type="submit">Upload</button>
     </form>
     {
+      library.length > 0 && (
+        <div class="lib-attach">
+          <p class="kicker"><span class="g">/</span>From the <a href="/media">media library</a></p>
+          <div class="ref-strip lib-scroll">
+            {library.map((r) => (
+              <figure class="ref-thumb">
+                <img src={`/img/${r.r2_key}`} alt={r.filename} loading="lazy" />
+                <figcaption>
+                  <span class="mono faint">{r.width}×{r.height}</span>
+                  <form method="post">
+                    <input type="hidden" name="action" value="attach-ref" />
+                    <input type="hidden" name="ref" value={r.id} />
+                    <button class="btn small" type="submit">Attach</button>
+                  </form>
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    {
       refs.results.length > 0 && (
         <form method="post" class="ref-role">
           <input type="hidden" name="action" value="ref-role" />
@@ -301,6 +305,9 @@ const estimate = estimateMicros(
   .ref-upload { display: flex; gap: 0.8rem; align-items: center; margin-top: 1rem; }
   .ref-upload input[type=file] { flex: 1; background: none; border: 0; padding: 0; color: var(--mute); font-size: 0.85rem; }
   .ref-role { margin-top: 1rem; }
+  .lib-attach { margin-top: 1.2rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+  .lib-attach .kicker { margin-bottom: 0.7rem; }
+  .lib-scroll { max-height: 16rem; overflow-y: auto; }
   .add-shot { margin-top: 1.5rem; }
   .run-bar { margin-top: 2rem; }
 </style>

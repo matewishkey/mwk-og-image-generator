@@ -1,0 +1,196 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
+import { microsToUsd } from '../../lib/runs';
+import { runProofs, PROOFS_SLUG, PROOF_PROMPTS } from '../../lib/proofs';
+import type { StyleRow } from '../../lib/runs';
+
+const env = ENV;
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
+
+const id = Astro.params.id!;
+const load = () =>
+  env.DB.prepare(
+    `SELECT s.*, t.kind AS team_kind FROM style s JOIN team t ON t.id = s.team_id
+      WHERE s.id = ?1 AND (s.team_id = ?2 OR t.kind = 'house')`,
+  )
+    .bind(id, team.id)
+    .first<StyleRow & { id: string; team_id: string; team_kind: string; description: string; version: number }>();
+
+let style = await load();
+if (!style) return new Response('Not found', { status: 404 });
+const editable = style.team_kind !== 'house';
+
+let error = '';
+let note = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'edit' && editable) {
+    const name = String(form.get('name') ?? '').trim();
+    const look = String(form.get('look') ?? '').trim();
+    if (!name || !look) error = 'A style needs at least a name and a look.';
+    else {
+      await env.DB.prepare(
+        `UPDATE style SET name=?1, description=?2, look=?3, subject=?4, avoid=?5,
+           version=version+1, updated_at=?6 WHERE id=?7 AND team_id=?8`,
+      )
+        .bind(
+          name,
+          String(form.get('description') ?? '').trim(),
+          look,
+          String(form.get('subject') ?? '').trim(),
+          String(form.get('avoid') ?? '').trim(),
+          new Date().toISOString(),
+          style.id,
+          team.id,
+        )
+        .run();
+      note = 'Saved. Proof it again to see the change.';
+      style = (await load())!;
+    }
+  } else if (action === 'proof') {
+    try {
+      await runProofs(env, { teamId: team.id, userId: user.id, style });
+      return Astro.redirect(`/styles/${id}`);
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+}
+
+// The proof sheet: newest take per proof shot for THIS style.
+interface ProofTake {
+  id: string;
+  status: string;
+  thumb_key: string | null;
+  card_key: string | null;
+  cost_micros: number;
+  error_kind: string | null;
+  created_at: string;
+  position: number;
+  label: string | null;
+}
+const proofs = await env.DB.prepare(
+  `SELECT t.id, t.status, t.thumb_key, t.card_key, t.cost_micros, t.error_kind, t.created_at,
+          sh.position, sh.label
+     FROM take t
+     JOIN shot sh ON sh.id = t.shot_id
+     JOIN project p ON p.id = sh.project_id
+    WHERE p.team_id = ?1 AND p.slug = ?2 AND t.style_id = ?3 AND t.superseded_by_id IS NULL
+    ORDER BY sh.position, t.created_at DESC`,
+)
+  .bind(team.id, PROOFS_SLUG, style.id)
+  .all<ProofTake>();
+
+const latestByShot = new Map<number, ProofTake>();
+for (const t of proofs.results) if (!latestByShot.has(t.position)) latestByShot.set(t.position, t);
+const sheet = [...latestByShot.values()].sort((a, b) => a.position - b.position);
+const anyLive = sheet.some((t) => ['queued', 'running', 'rendering'].includes(t.status));
+const spent = proofs.results.reduce((s, t) => s + t.cost_micros, 0);
+---
+
+<Base title={style.name} nav="styles">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{style.team_kind === 'house' ? 'House style' : 'Style'}</p>
+    <h1>{style.name}</h1>
+    <p class="sub">{style.description}</p>
+  </div>
+
+  {error && <p class="flash">{error}</p>}
+  {note && <p class="flash">{note}</p>}
+
+  <div class="cols">
+    <section class="defn">
+      {
+        editable ? (
+          <form method="post">
+            <input type="hidden" name="action" value="edit" />
+            <label class="field"><span>Name</span><input type="text" name="name" value={style.name} required /></label>
+            <label class="field"><span>Description</span><input type="text" name="description" value={style.description} /></label>
+            <label class="field"><span>Look — medium, lighting, palette, camera. Never a subject.</span>
+              <textarea name="look" required>{style.look}</textarea></label>
+            <label class="field"><span>Subject — how a real person is rendered</span>
+              <textarea name="subject">{style.subject}</textarea></label>
+            <label class="field"><span>Avoid</span><input type="text" name="avoid" value={style.avoid} /></label>
+            <button class="btn small" type="submit">Save</button>
+          </form>
+        ) : (
+          <>
+            <p><b>Look:</b> {style.look}</p>
+            {style.subject && <p><b>Subject:</b> {style.subject}</p>}
+            {style.avoid && <p><b>Avoid:</b> {style.avoid}</p>}
+            <p class="sub">House styles are read-only — duplicate from the <a href="/styles">library</a> to edit.</p>
+          </>
+        )
+      }
+    </section>
+
+    <section class="proofsheet">
+      <div class="proof-head">
+        <p class="kicker"><span class="g">/</span>Proof sheet — the four reference prompts</p>
+        <form method="post">
+          <input type="hidden" name="action" value="proof" />
+          <button class="btn small" type="submit">
+            {sheet.length ? 'Proof again' : 'Render proof sheet'} · ~$0.01
+          </button>
+        </form>
+      </div>
+      {sheet.length === 0 && <p class="sub">Not proofed yet — a cent shows you exactly what this style does to a face, a scene, a crowd and a sign.</p>}
+      <div class="proof-grid">
+        {
+          sheet.map((t) => (
+            <figure class="take" data-take={t.id} data-status={t.status} data-started={t.created_at}>
+              {t.status === 'succeeded' && t.thumb_key ? (
+                <a href={`/img/${t.card_key}`} target="_blank"><img src={`/img/${t.thumb_key}`} alt={t.label ?? ''} loading="lazy" /></a>
+              ) : (
+                <div class="take-hold">
+                  <span class={`status ${t.status}`}>{t.status}</span>
+                  {['queued', 'running', 'rendering'].includes(t.status) && <span class="mono elapsed" data-elapsed />}
+                  {t.status === 'failed' && <span class="err">{t.error_kind}</span>}
+                </div>
+              )}
+              <figcaption><span class="mono">{t.label}</span></figcaption>
+            </figure>
+          ))
+        }
+      </div>
+      {spent > 0 && <p class="money proof-spent">proofing spent {microsToUsd(spent)}</p>}
+    </section>
+  </div>
+</Base>
+
+<script is:inline define:vars={{ anyLive }}>
+  const tick = () => {
+    document.querySelectorAll('.take[data-started]').forEach((el) => {
+      const live = ['queued', 'running', 'rendering'].includes(el.dataset.status);
+      const out = el.querySelector('[data-elapsed]');
+      if (live && out) out.textContent = `${Math.max(0, Math.round((Date.now() - Date.parse(el.dataset.started)) / 1000))}s`;
+    });
+  };
+  tick();
+  if (anyLive) {
+    setInterval(tick, 1000);
+    // Proofs settle in seconds; while any is live, just re-read the page.
+    setTimeout(() => location.reload(), 5000);
+  }
+</script>
+
+<style>
+  .cols { display: grid; grid-template-columns: minmax(20rem, 34rem) 1fr; gap: 2.5rem; align-items: start; }
+  .cols > * { min-width: 0; }
+  @media (width <= 900px) { .cols { grid-template-columns: 1fr; } }
+  .defn p { margin-bottom: 0.5rem; max-width: var(--measure); }
+  .proof-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: 0.9rem; }
+  .proof-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.9rem; }
+  .proof-grid > * { min-width: 0; }
+  .take { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .take img { display: block; width: 100%; height: auto; }
+  .take-hold { aspect-ratio: 1200/630; display: flex; flex-direction: column; gap: 0.4rem; align-items: center; justify-content: center; }
+  .err { color: var(--mute); font-size: 0.75rem; }
+  figcaption { padding: 0.35rem 0.6rem; font-size: 0.75rem; }
+  .proof-spent { margin-top: 0.8rem; }
+</style>

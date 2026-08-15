@@ -5,7 +5,7 @@ import '../styles/app.css';
 interface Props {
   title: string;
   /** Which top-nav item is current, if any. */
-  nav?: 'projects' | 'styles' | 'models' | 'history' | 'team';
+  nav?: 'projects' | 'styles' | 'models' | 'history' | 'team' | 'media';
 }
 const { title, nav } = Astro.props;
 const user = Astro.locals.user;
@@ -39,6 +39,7 @@ const user = Astro.locals.user;
           <div class="links">
             <a href="/projects" aria-current={nav === 'projects' ? 'page' : undefined}>Projects</a>
             <a href="/styles" aria-current={nav === 'styles' ? 'page' : undefined}>Styles</a>
+            <a href="/media" aria-current={nav === 'media' ? 'page' : undefined}>Media</a>
             <a href="/models" aria-current={nav === 'models' ? 'page' : undefined}>Models</a>
             <a href="/history" aria-current={nav === 'history' ? 'page' : undefined}>History</a>
             <a href="/team" aria-current={nav === 'team' ? 'page' : undefined}>Team</a>
