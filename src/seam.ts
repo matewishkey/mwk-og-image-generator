@@ -70,6 +70,13 @@ export const ARCHETYPE_PANELS: Record<LayoutConfig['archetype'], number> = {
   filmstrip: 4,
 };
 
+export interface RenderOutput {
+  outKey: string;
+  thumbKey: string;
+  width: number;
+  height: number;
+}
+
 export interface EngineRenderRequest {
   designId: string;
   /** R2 keys the finished design is written to. */
@@ -77,6 +84,9 @@ export interface EngineRenderRequest {
   thumbKey: string;
   width: number;
   height: number;
+  /** Batch mode: render the same layout+panels at each size. Panels are fetched
+   *  once, which is the whole point — outKey/width/height above are ignored. */
+  outputs?: RenderOutput[];
   layout: LayoutConfig;
   /** The brand kit's config JSON — exactly the BrandConfig shape brand.ts reads. */
   brand: unknown;
@@ -89,6 +99,8 @@ export interface EngineRenderResponse {
   ok: true;
   width: number;
   height: number;
+  /** Batch mode: one entry per requested output, same order. */
+  results?: { outKey: string; ok: boolean; error?: string }[];
 }
 
 export interface EngineGenerateRequest {

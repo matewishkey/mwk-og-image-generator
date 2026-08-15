@@ -3,7 +3,7 @@ import Base from '../../../layouts/Base.astro';
 import ProjectTabs from '../../../components/ProjectTabs.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
-import { createDesign } from '../../../lib/design';
+import { createCollection, createDesign } from '../../../lib/design';
 import { ARCHETYPE_PANELS, LayoutConfigSchema } from '../../../../../src/seam.ts';
 import { generateLayouts } from '../../../lib/generate';
 import { ulid } from '../../../lib/ulid';
@@ -114,22 +114,47 @@ if (Astro.request.method === 'POST') {
     }
   } else
   try {
-    await createDesign(env, {
+    const formatChoice = String(form.get('format') ?? '');
+    const text = {
+      title: String(form.get('title') ?? '').trim() || undefined,
+      kicker: String(form.get('kicker') ?? '').trim() || undefined,
+      tagline: String(form.get('tagline') ?? '').trim() || undefined,
+    };
+    const base = {
       teamId: team.id,
       userId: user.id,
       projectId: bundle.project.id,
       layoutId: String(form.get('layout') ?? ''),
-      formatId: String(form.get('format') ?? ''),
       brandKitId: bundle.project.brand_kit_id,
-      title: String(form.get('title') ?? '').trim() || undefined,
-      kicker: String(form.get('kicker') ?? '').trim() || undefined,
-      tagline: String(form.get('tagline') ?? '').trim() || undefined,
+      ...text,
       panels: picks.results.map((p) => ({
         takeId: p.take_id,
         artKey: p.art_key,
         label: p.label ?? undefined,
       })),
-    });
+    };
+    if (formatChoice === 'all') {
+      // One design across every format: a Collection. Renders are $0.00, so the
+      // answer to "which format?" is "all of them" — download the ones you need.
+      const collectionId = ulid();
+      await env.DB.prepare(
+        `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      )
+        .bind(collectionId, team.id, bundle.project.id,
+              usable.find((l) => l.id === base.layoutId)?.name ?? null,
+              user.id, new Date().toISOString())
+        .run();
+      const { rendered, failed } = await createCollection(env, {
+        ...base,
+        collectionId,
+        formats: formats.results,
+      });
+      return Astro.redirect(
+        `/projects/${slug}/design${failed ? `?gen=${rendered}+of+${rendered + failed}+rendered` : ''}`,
+      );
+    }
+    await createDesign(env, { ...base, formatId: formatChoice });
     return Astro.redirect(`/projects/${slug}/design`);
   } catch (e) {
     error = (e as Error).message;
@@ -137,7 +162,7 @@ if (Astro.request.method === 'POST') {
 }
 
 const designs = await env.DB.prepare(
-  `SELECT d.id, d.title, d.tagline, d.kicker, d.r2_key, d.thumb_key, d.width, d.height, d.created_at,
+  `SELECT d.id, d.collection_id, d.title, d.tagline, d.kicker, d.r2_key, d.thumb_key, d.width, d.height, d.created_at,
           l.name AS layout_name, f.name AS format_name, f.slug AS format_slug
      FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
     WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
@@ -146,6 +171,7 @@ const designs = await env.DB.prepare(
   .bind(bundle.project.id)
   .all<{
     id: string;
+    collection_id: string | null;
     title: string | null;
     tagline: string | null;
     kicker: string | null;
@@ -158,6 +184,20 @@ const designs = await env.DB.prepare(
     format_name: string;
     format_slug: string;
   }>();
+
+// Group by collection; a design without one is its own group of one.
+type DesignRow = (typeof designs.results)[number];
+const groups: { key: string; items: DesignRow[] }[] = [];
+const byKey = new Map<string, DesignRow[]>();
+for (const d of designs.results) {
+  const key = d.collection_id ?? `single-${d.id}`;
+  if (!byKey.has(key)) {
+    const items: DesignRow[] = [];
+    byKey.set(key, items);
+    groups.push({ key, items });
+  }
+  byKey.get(key)!.push(d);
+}
 ---
 
 <Base title={`${bundle.project.name} · design`} nav="projects">
@@ -199,6 +239,7 @@ const designs = await env.DB.prepare(
           <label class="field">
             <span>Format</span>
             <select name="format" required>
+              <option value="all" selected>Every format — one collection, {formats.results.length} designs</option>
               {formats.results.map((f) => (
                 <option value={f.id}>{f.name} · {f.width}×{f.height}</option>
               ))}
@@ -251,24 +292,34 @@ const designs = await env.DB.prepare(
     )
   }
 
-  <div class="designs-grid">
-    {
-      designs.results.map((d) => (
-        <figure class="design-card">
-          <a href={`/img/${d.r2_key}`} target="_blank">
-            <img src={`/img/${d.thumb_key}`} alt={d.format_name} loading="lazy" />
-          </a>
-          <figcaption>
-            <span>{d.layout_name}</span>
-            <span class="mono faint">{d.format_slug} · {d.width}×{d.height}</span>
-            <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`}>
-              Download
-            </a>
-          </figcaption>
-        </figure>
-      ))
-    }
-  </div>
+  {
+    groups.map((g) => (
+      <section class="design-group">
+        {g.items.length > 1 && (
+          <h2>
+            {g.items[0]!.layout_name}
+            <span class="mono faint"> · collection of {g.items.length}</span>
+          </h2>
+        )}
+        <div class="designs-grid">
+          {g.items.map((d) => (
+            <figure class="design-card">
+              <a href={`/img/${d.r2_key}`} target="_blank">
+                <img src={`/img/${d.thumb_key}`} alt={d.format_name} loading="lazy" />
+              </a>
+              <figcaption>
+                <span>{g.items.length > 1 ? d.format_name : d.layout_name}</span>
+                <span class="mono faint">{d.format_slug} · {d.width}×{d.height}</span>
+                <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`}>
+                  Download
+                </a>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      </section>
+    ))
+  }
 </Base>
 
 <style>
@@ -276,6 +327,8 @@ const designs = await env.DB.prepare(
   .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
   .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
   .form-grid > * { min-width: 0; }
+  .design-group { margin-bottom: 2rem; }
+  .design-group h2 { font-size: 1.1rem; margin-bottom: 0.8rem; }
   .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); gap: 1rem; }
   .designs-grid > * { min-width: 0; }
   .design-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }

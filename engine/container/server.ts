@@ -249,6 +249,26 @@ const server = createServer((req, res) => {
         const brand = r.brand ? (r.brand as BrandConfig) : await loadBrand();
         const panels = [];
         for (const pnl of r.panels) panels.push({ buf: await r2Get(pnl.key), label: pnl.label });
+
+        if (r.outputs?.length) {
+          // Batch: same layout + panels at every size; panels fetched exactly once.
+          const results = [];
+          for (const out of r.outputs) {
+            try {
+              const png = await renderDesign(cfg, brand, out.width, out.height, r.text, panels);
+              const thumb = await sharp(png).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
+              await r2Put(out.outKey, png, 'image/png');
+              await r2Put(out.thumbKey, thumb, 'image/webp');
+              results.push({ outKey: out.outKey, ok: true });
+            } catch (e) {
+              results.push({ outKey: out.outKey, ok: false, error: (e as Error).message });
+            }
+          }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, width: 0, height: 0, results }));
+          return;
+        }
+
         const png = await renderDesign(cfg, brand, r.width, r.height, r.text, panels);
         const thumb = await sharp(png).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
         await r2Put(r.outKey, png, 'image/png');

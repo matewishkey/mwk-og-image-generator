@@ -82,16 +82,18 @@ interface TakeRow {
   created_at: string;
   hidden_at: string | null;
   picked: number;
+  superseded: number;
 }
 
 const takes = await env.DB.prepare(
   `SELECT t.id, t.shot_id, t.model_alias, t.tier, t.iteration, t.status, t.card_key,
           t.thumb_key, t.cost_micros, t.duration_ms, t.error_kind, t.error_message,
           t.created_at, t.hidden_at,
-          (t.id = sh.picked_take_id) AS picked
+          (t.id = sh.picked_take_id) AS picked,
+          (t.superseded_by_id IS NOT NULL) AS superseded
      FROM take t JOIN run r ON r.id = t.run_id JOIN shot sh ON sh.id = t.shot_id
-    WHERE r.project_id = ?1 AND t.superseded_by_id IS NULL
-    ORDER BY t.model_alias, t.iteration, t.created_at DESC`,
+    WHERE r.project_id = ?1
+    ORDER BY t.model_alias, t.iteration, superseded, t.created_at DESC`,
 )
   .bind(bundle.project.id)
   .all<TakeRow>();
@@ -148,12 +150,13 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
           <div class="takes-grid">
             {visible.map((t) => (
               <figure
-                class={`take${t.picked ? ' picked' : ''}`}
+                class={`take${t.picked ? ' picked' : ''}${t.superseded ? ' superseded' : ''}`}
                 data-take={t.id}
                 data-status={t.status}
                 data-started={t.created_at}
               >
                 {t.picked ? <span class="pick-chip">PICK</span> : null}
+                {!t.picked && t.superseded ? <span class="old-chip">SUPERSEDED</span> : null}
                 {t.status === 'succeeded' && t.card_key ? (
                   <a href={`/img/${t.card_key}`} target="_blank">
                     <img
@@ -189,11 +192,13 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
                           <button class="btn small" type="submit">Pick</button>
                         </form>
                       )}
-                      <form method="post">
-                        <input type="hidden" name="action" value="reroll" />
-                        <input type="hidden" name="take" value={t.id} />
-                        <button class="btn small ghost" type="submit">Re-roll</button>
-                      </form>
+                      {!t.superseded && (
+                        <form method="post">
+                          <input type="hidden" name="action" value="reroll" />
+                          <input type="hidden" name="take" value={t.id} />
+                          <button class="btn small ghost" type="submit">Re-roll</button>
+                        </form>
+                      )}
                       {!t.picked && (
                         <form method="post">
                           <input type="hidden" name="action" value="hide" />
@@ -272,6 +277,13 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
   .takes-grid > * { min-width: 0; }
   .take { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
   .take.picked { border-color: var(--red); }
+  .take.superseded img { opacity: 0.55; }
+  .old-chip {
+    position: absolute; top: 10px; left: 10px; z-index: 2;
+    font: 700 0.62rem/1 var(--font-mono); letter-spacing: 0.16em;
+    background: var(--surface-2); color: var(--faint); border: 1px solid var(--line);
+    padding: 0.3rem 0.45rem;
+  }
   .pick-chip {
     position: absolute; top: 10px; left: 10px; z-index: 2;
     font: 700 0.62rem/1 var(--font-mono); letter-spacing: 0.16em;

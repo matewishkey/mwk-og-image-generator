@@ -120,12 +120,11 @@ const estimate = estimateMicros(
 
   {
     bundle.shots.map((s) => (
-      <details class="card shot-card" open={suggestFor === s.id}>
-        <summary>
+      <section class="card shot-card">
+        <header class="shot-head">
           <span class="mono shot-pos">{s.position}</span>
           <b>{s.label ?? `Shot ${s.position}`}</b>
-          <span class="shot-preview">{s.prompt.slice(0, 110)}{s.prompt.length > 110 ? '…' : ''}</span>
-        </summary>
+        </header>
         <form method="post" class="shot-edit">
           <input type="hidden" name="action" value="edit-shot" />
           <input type="hidden" name="shot" value={s.id} />
@@ -154,19 +153,19 @@ const estimate = estimateMicros(
             ))}
           </div>
         )}
-      </details>
+      </section>
     ))
   }
 
-  <details class="card add-shot" open={bundle.shots.length === 0}>
-    <summary><b>Add a shot</b></summary>
+  <section class="card add-shot">
+    <header class="shot-head"><b>Add a shot</b></header>
     <form method="post">
       <input type="hidden" name="action" value="add-shot" />
       <label class="field"><span>Label</span><input type="text" name="label" placeholder="optional" /></label>
       <label class="field"><span>What is happening</span><textarea name="prompt" required></textarea></label>
       <button class="btn small" type="submit">Add shot</button>
     </form>
-  </details>
+  </section>
 
   <form method="post" class="run-bar">
     <input type="hidden" name="action" value="run" />
@@ -177,17 +176,15 @@ const estimate = estimateMicros(
 </Base>
 
 <style>
-  .shot-card summary { display: flex; align-items: baseline; gap: 0.7rem; cursor: pointer; }
+  .shot-head { display: flex; align-items: baseline; gap: 0.7rem; }
   .suggestions { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
   .suggestions .kicker { margin-bottom: 0.7rem; }
   .suggestion { display: flex; gap: 1rem; align-items: flex-start; margin-bottom: 0.8rem; }
   .suggestion p { flex: 1; color: var(--mute); font-size: 0.92rem; }
   .suggestion .btn { flex: none; }
   .shot-pos { color: var(--faint); font-weight: 700; }
-  .shot-preview { color: var(--mute); font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .shot-edit, .add-shot form { margin-top: 1rem; }
   .row { display: flex; gap: 0.6rem; }
   .add-shot { margin-top: 1.5rem; }
-  .add-shot summary { cursor: pointer; }
   .run-bar { margin-top: 2rem; }
 </style>
