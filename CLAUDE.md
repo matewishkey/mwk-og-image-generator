@@ -94,6 +94,20 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   `brand/brand.json` by `web/scripts/gen-seed.mjs` → migration `0002_seed.sql`.
 - The build plan (final, reviewed): https://work.l/mat-mwk-og-image-generator/2026-08-14_plan/
 
+## UI rules mate has set — don't regress these
+
+- **No accordions.** Everything visible, big pages are fine. (Shots page was
+  details/summary once; buttons inside collapsed it and he called it out.)
+- **Nothing that ran ever disappears.** Superseded takes stay on the contact sheet,
+  dimmed with a chip, still pickable. "The old one is never overwritten" is UI, not
+  just schema.
+- **Generate-first, never config-first.** Twenty rendered options beat one form.
+  Fine-tune panels exist for the tenth time, not the first.
+- **Design tab shape**: one leading image with its actions, all versions in a grid
+  under it, click a version to lead. "Every format" (a collection) is the default
+  render, not a choice.
+- Every screen keeps a pasteable URL; filters live in the query string.
+
 ## Phase 2 ops — the runbook
 
 - **Deploy web**: `cd web && npm run deploy` (build + `wrangler deploy -c dist/server/wrangler.json`
