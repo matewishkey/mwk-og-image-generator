@@ -3,15 +3,15 @@
  *
  * Every slug, input field and price here was read off the model's own Replicate
  * page (`/api/schema` for the fields, the page's pricing block for the money) on
- * PRICES_VERIFIED_ON. Replicate is the source of truth — `mwk-og models --check`
- * re-reads the live pages and tells you what drifted. Never edit a price from memory.
+ * PRICES_VERIFIED_ON. Replicate is the source of truth — the studio's nightly catalog
+ * sync surfaces drift on its /models page. Never edit a price from memory.
  */
 
 export const PRICES_VERIFIED_ON = '2026-08-13';
 
 /**
- * Checked on PRICES_VERIFIED_ON: there is no gpt-image-3, no nano-banana-3, no seedream-5
- * and no flux-kontext-2 on Replicate. The newest in each family are the ones listed below.
+ * Checked on PRICES_VERIFIED_ON: there is no gpt-image-3, no nano-banana-3 and no
+ * flux-kontext-2 on Replicate (seedream-5-lite HAS since shipped and is listed below).
  * `black-forest-labs/flux-2-flex` also exists ($0.06) and is deliberately left out — it is
  * the knob-heavy variant, and its `prompt_upsampling` defaults to TRUE, so it would need
  * the same pinning treatment as seedream-4 before it could join a comparison.

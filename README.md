@@ -8,7 +8,8 @@ render from one model tells you nothing. Sixteen renders across four models and 
 laid out on one page, tells you immediately which direction is right. At roughly $0.05 an
 image that comparison costs less than the time spent staring at a single disappointing one.
 
-**Status: phase 1 — the prompt workflow.** A CLI. No web UI yet.
+**Status: phase 1 (this CLI) + phase 2 (the web studio at og.matewishkey.com,
+invite-only — `web/` and `engine/` in this repo).** Both run the same `src/` library.
 
 ```
 mwk-og gen -p "a recruiter asks a honey-trap question and the candidate pauses too long" \
@@ -87,6 +88,10 @@ targets Replicate rather than four separate APIs.
 | `recraft3` | `recraft-ai/recraft-v3` | $0.040 | **none — text only** |
 | `nanopro` | `google/nano-banana-pro` | $0.150 (1K) | up to 14 |
 | `gpt15` | `openai/gpt-image-1.5` | $0.050 (medium) | up to 10 |
+| `seedream5` | `bytedance/seedream-5-lite` | $0.035 | up to 10 |
+| `grok` | `xai/grok-imagine-image` | $0.020 | **1 only** |
+| `pimage` | `prunaai/p-image` | $0.005 | none — text only |
+| `zturbo` | `prunaai/z-image-turbo` | $0.0025 | none — text only |
 
 `*` = the default sweep. They are chosen to fail differently: `nano2` holds a likeness,
 `gpt2` follows instructions, `seedream45` reads a scene's spatial layout best, `flux2` comes
@@ -97,11 +102,13 @@ input MP*. Three 0.8 MP reference photos add ~$0.035 to every render, which is m
 cost. The tool measures your actual reference files and prices accordingly rather than
 assuming — so the number `--dry-run` shows is the real one.
 
-Checked 2026-08-13: there is no gpt-image-3, nano-banana-3, seedream-5 or flux-kontext-2 on
-Replicate. `flux-2-flex` exists at $0.060 and is deliberately excluded — its
-`prompt_upsampling` defaults to **true**, so it would rewrite prompts the way Seedream 4 did.
+`zturbo` and `pimage` are the draft models: together under a cent, good enough to test
+whether a scene idea works before finishing on `gpt2`. `flux-2-flex` exists at $0.060 and is
+deliberately excluded — its `prompt_upsampling` defaults to **true**, so it would rewrite
+prompts the way Seedream 4 did. `mwk-og models` prints the authoritative list; prices live
+in `src/models.ts` and nowhere else.
 
-`gpt2` is the slow one — measured at 35–68s an image against 10–27s for the others, so it
+`gpt2` is the slow one — measured at 35–64s an image against 10–27s for the others, so it
 sets the wall-clock of any sweep it is in. Drop it with `-m nano2,seedream45,flux2` when you
 want a fast look around.
 
@@ -211,9 +218,12 @@ Feed a still you already like in as the first frame: `--ref out/<run>/art/<card>
 `--seconds` picks the clip length; each model has its own permitted set and falls back to
 its default rather than erroring.
 
-## Coming later
+## The studio
 
-The web UI is phase 2. `src/` is already the library it would call.
+Phase 2 shipped: **og.matewishkey.com** — projects, contact sheets, picks, layouts,
+collections, style proof sheets and concept packs, running this same `src/` library in a
+Cloudflare container. Invite-only; the `web/` and `engine/` directories are its code, and
+`CLAUDE.md` carries the ops notes.
 
 ## Licence
 
