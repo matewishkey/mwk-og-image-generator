@@ -94,6 +94,30 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   `brand/brand.json` by `web/scripts/gen-seed.mjs` → migration `0002_seed.sql`.
 - The build plan (final, reviewed): https://work.l/mat-mwk-og-image-generator/2026-08-14_plan/
 
+## Phase 2 ops — the runbook
+
+- **Deploy web**: `cd web && npm run deploy` (build + `wrangler deploy -c dist/server/wrangler.json`
+  — run it from `web/`, the -c path is relative). **Deploy engine**: bump `INSTANCE_NAME` in
+  `engine/wrangler.jsonc` whenever the image changed, then `cd engine && wrangler deploy` with
+  `CLOUDFLARE_DEPLOY_TOKEN` (td-sops) as CLOUDFLARE_API_TOKEN — the env token lacks Containers perms.
+  `max_instances: 4` exists because drained instances hold slots for up to `sleepAfter`.
+- **After every deploy**: `cd web && TOKEN=<fresh login token> node tests/smoke.mjs` — a real
+  Chromium pass against the live site. Mint the token by inserting a `login_token` row (SHA-256 of
+  the token) via `wrangler d1 execute`.
+- **Crons (engine worker)**: `17 3 * * *` model-catalog sync → `/internal/catalog`;
+  `*/10 * * * *` lease sweep → `/internal/sweep`. Both HMAC-signed with SEAM_SECRET.
+- **Backups**: D1 Time Travel is live — `wrangler d1 time-travel info mwk-studio` prints the
+  current bookmark, `restore --bookmark=<b>` rolls back (30-day window). R2 objects are immutable
+  and content-addressed; there is no R2 backup beyond that.
+- **Style proofs** are real takes in the hidden per-team `_style-proofs` project (archived on
+  purpose) — that is why they appear in History and the charge ledger with zero extra machinery.
+- **Deliberately NOT built** (decided with mate, 2026-08-15, "keep it simple"): Workflows as the
+  per-take driver and Replicate webhooks (the container driver + lease sweep + idempotent re-runs
+  cover it at this scale — revisit only if runs grow to where an abandoned run costs real money);
+  R2 retention/GC for unpicked takes (pennies); `revision`/`event` audit tables (take.prompt already
+  pins the exact string per billed image, History covers spend). Don't reintroduce these without a
+  new reason.
+
 ## Prompt fidelity is a correctness property, not a nicety
 
 `PROMPT_FIDELITY` in `src/models.ts` is the long version. The short version: a comparison is

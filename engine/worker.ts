@@ -101,7 +101,15 @@ export default {
     }
     return new Response('not found', { status: 404 });
   },
-  async scheduled(_event: unknown, env: EngineEnv): Promise<void> {
+  async scheduled(event: { cron?: string }, env: EngineEnv): Promise<void> {
+    if (event.cron === '*/10 * * * *') {
+      // Lease sweep: a dead container must become a visible 'abandoned' failure
+      // even when nobody has the contact sheet open.
+      const body = JSON.stringify({ sweep: true });
+      const url = env.EVENTS_URL.replace('/internal/events', '/internal/sweep');
+      await fetch(url, { method: 'POST', headers: await seamHeaders(env.SEAM_SECRET, body), body });
+      return;
+    }
     await syncCatalog(env);
   },
 };
