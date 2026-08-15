@@ -5,5 +5,16 @@
     "verbatimModuleSyntax": true
   },
   "include": ["src/**/*", "../src/**/*"],
-  "exclude": ["dist"]
+  // Node-only modules the worker never imports; the CLI typechecks them at the root.
+  "exclude": [
+    "dist",
+    "../src/cli.ts",
+    "../src/replicate.ts",
+    "../src/run.ts",
+    "../src/brand.ts",
+    "../src/montage.ts",
+    "../src/video.ts",
+    "../src/sheet.ts",
+    "../src/style-fs.ts"
+  ]
 }

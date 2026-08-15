@@ -6,6 +6,8 @@ import { ulid } from '../../../lib/ulid';
 import { loadProject } from '../../../lib/data';
 import { createRun, estimateMicros, microsToUsd } from '../../../lib/runs';
 import { suggestShotVariants } from '../../../lib/generate';
+import { loadProjectRefs } from '../../../lib/runs';
+import { sniffImage } from '../../../lib/imgsize';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -57,6 +59,60 @@ if (Astro.request.method === 'POST') {
     if (bundle.shots.some((s) => s.id === shotId)) {
       await env.DB.prepare(`UPDATE shot SET deleted_at=?1 WHERE id=?2`).bind(now, shotId).run();
     }
+  } else if (action === 'upload-refs') {
+    const files = form.getAll('photos').filter((f): f is File => f instanceof File && f.size > 0);
+    const posRow = await env.DB.prepare(
+      `SELECT coalesce(max(position), 0) AS p FROM reference_use WHERE owner_type='project' AND owner_id=?1`,
+    )
+      .bind(bundle.project.id)
+      .first<{ p: number }>();
+    let pos = posRow?.p ?? 0;
+    for (const file of files) {
+      if (file.size > 12 * 1024 * 1024) {
+        error = `${file.name} is over 12 MB.`;
+        continue;
+      }
+      const bytes = await file.arrayBuffer();
+      const info = sniffImage(bytes);
+      if (!info) {
+        error = `${file.name} is not a PNG, JPEG or WebP.`;
+        continue;
+      }
+      // content-address by the raw digest, hex-encoded
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+      const key = `teams/${team.id}/refs/${digest}${info.ext}`;
+      await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: info.mime } });
+      // one photo stored once per team; a duplicate upload reuses the row
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO reference (id, team_id, r2_key, sha256, filename, mime, width, height, bytes, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+      )
+        .bind(ulid(), team.id, key, digest, file.name, info.mime, info.width, info.height, file.size, now)
+        .run();
+      const ref = await env.DB.prepare(`SELECT id FROM reference WHERE team_id=?1 AND sha256=?2`)
+        .bind(team.id, digest)
+        .first<{ id: string }>();
+      if (ref) {
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO reference_use (reference_id, owner_type, owner_id, position)
+           VALUES (?1, 'project', ?2, ?3)`,
+        )
+          .bind(ref.id, bundle.project.id, ++pos)
+          .run();
+      }
+    }
+  } else if (action === 'remove-ref') {
+    await env.DB.prepare(
+      `DELETE FROM reference_use WHERE owner_type='project' AND owner_id=?1 AND reference_id=?2`,
+    )
+      .bind(bundle.project.id, String(form.get('ref') ?? ''))
+      .run();
+  } else if (action === 'ref-role') {
+    await env.DB.prepare(`UPDATE project SET ref_role=?1, updated_at=?2 WHERE id=?3`)
+      .bind(String(form.get('ref_role') ?? '').trim() || null, now, bundle.project.id)
+      .run();
   } else if (action === 'suggest') {
     const shotId = String(form.get('shot') ?? '');
     const shot = bundle.shots.find((s) => s.id === shotId);
@@ -97,10 +153,19 @@ if (Astro.request.method === 'POST') {
 }
 
 const models: string[] = JSON.parse(bundle.project.models);
+const refs = await env.DB.prepare(
+  `SELECT r.id, r.r2_key, r.filename, r.width, r.height FROM reference_use u
+     JOIN reference r ON r.id = u.reference_id
+    WHERE u.owner_type='project' AND u.owner_id=?1 ORDER BY u.position`,
+)
+  .bind(bundle.project.id)
+  .all<{ id: string; r2_key: string; filename: string; width: number | null; height: number | null }>();
+const refInfo = await loadProjectRefs(env, bundle.project.id);
 const estimate = estimateMicros(
   models,
   bundle.project.tier,
   bundle.shots.length * bundle.project.iterations,
+  refInfo.megapixels,
 );
 ---
 
@@ -167,6 +232,48 @@ const estimate = estimateMicros(
     </form>
   </section>
 
+  <section class="card refs-card">
+    <header class="shot-head"><b>Reference photos</b>
+      <span class="sub-inline">models stay faithful to these; single-reference models only ever see the first</span>
+    </header>
+    {
+      refs.results.length > 0 && (
+        <div class="ref-strip">
+          {refs.results.map((r) => (
+            <figure class="ref-thumb">
+              <img src={`/img/${r.r2_key}`} alt={r.filename} loading="lazy" />
+              <figcaption>
+                <span class="mono faint">{r.width}×{r.height}</span>
+                <form method="post">
+                  <input type="hidden" name="action" value="remove-ref" />
+                  <input type="hidden" name="ref" value={r.id} />
+                  <button class="btn small ghost" type="submit">Remove</button>
+                </form>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      )
+    }
+    <form method="post" enctype="multipart/form-data" class="ref-upload">
+      <input type="hidden" name="action" value="upload-refs" />
+      <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required />
+      <button class="btn small" type="submit">Upload</button>
+    </form>
+    {
+      refs.results.length > 0 && (
+        <form method="post" class="ref-role">
+          <input type="hidden" name="action" value="ref-role" />
+          <label class="field">
+            <span>Who is the reference person in the scene? Needed whenever a scene has more than one person — models guess, and they guess differently.</span>
+            <input type="text" name="ref_role" value={bundle.project.ref_role ?? ''} placeholder='e.g. "the interviewer"' />
+          </label>
+          <button class="btn small ghost" type="submit">Save role</button>
+        </form>
+      )
+    }
+  </section>
+
   <form method="post" class="run-bar">
     <input type="hidden" name="action" value="run" />
     <button class="btn" type="submit" disabled={!bundle.shots.length}>
@@ -185,6 +292,15 @@ const estimate = estimateMicros(
   .shot-pos { color: var(--faint); font-weight: 700; }
   .shot-edit, .add-shot form { margin-top: 1rem; }
   .row { display: flex; gap: 0.6rem; }
+  .refs-card { margin-top: 1.5rem; }
+  .sub-inline { color: var(--faint); font-size: 0.8rem; font-weight: 400; }
+  .ref-strip { display: flex; gap: 0.8rem; flex-wrap: wrap; margin: 1rem 0; }
+  .ref-thumb { width: 9.5rem; }
+  .ref-thumb img { width: 100%; height: 7rem; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--line); }
+  .ref-thumb figcaption { display: flex; justify-content: space-between; align-items: center; margin-top: 0.3rem; font-size: 0.72rem; }
+  .ref-upload { display: flex; gap: 0.8rem; align-items: center; margin-top: 1rem; }
+  .ref-upload input[type=file] { flex: 1; background: none; border: 0; padding: 0; color: var(--mute); font-size: 0.85rem; }
+  .ref-role { margin-top: 1rem; }
   .add-shot { margin-top: 1.5rem; }
   .run-bar { margin-top: 2rem; }
 </style>

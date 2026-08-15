@@ -18,6 +18,7 @@
     "bindings": [{ "name": "ENGINE_CONTAINER", "class_name": "EngineContainer" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EngineContainer"] }],
+  "triggers": { "crons": ["17 3 * * *"] },
   "vars": {
     "INSTANCE_NAME": "main-5",
     "R2_ENDPOINT": "https://ef7d622089ca4480c9f6fbf368f66787.r2.cloudflarestorage.com",

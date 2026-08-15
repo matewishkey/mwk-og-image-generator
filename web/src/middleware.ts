@@ -52,5 +52,17 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
   if (!ctx.locals.user && !PUBLIC.some((re) => re.test(ctx.url.pathname))) {
     return ctx.redirect('/login');
   }
+
+  // Viewers read and download; every mutation is a POST, so one check covers them all.
+  if (
+    ctx.request.method === 'POST' &&
+    ctx.locals.user &&
+    ctx.locals.team?.role === 'viewer' &&
+    !ctx.url.pathname.startsWith('/auth/')
+  ) {
+    return new Response('Viewers cannot change things. Ask an owner for the editor role.', {
+      status: 403,
+    });
+  }
   return next();
 });

@@ -1,0 +1,153 @@
+---
+import Base from '../layouts/Base.astro';
+import { ENV } from '../lib/runtime';
+import { ulid } from '../lib/ulid';
+import { randomToken, sha256Hex } from '../lib/crypto';
+import { sendMail } from '../lib/ses';
+import { isOwner } from '../lib/authz';
+
+const env = ENV;
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
+
+let error = '';
+let note = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const now = new Date();
+
+  if (!isOwner(team)) {
+    error = 'Only an owner can manage the team.';
+  } else if (action === 'invite') {
+    const email = String(form.get('email') ?? '').trim();
+    const role = String(form.get('role') ?? 'editor');
+    if (!email.includes('@') || !['owner', 'editor', 'viewer'].includes(role)) {
+      error = 'A valid address and role, please.';
+    } else {
+      const token = randomToken();
+      await env.DB.prepare(
+        `INSERT INTO invite (id, team_id, email, role, token_hash, created_by, created_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      )
+        .bind(
+          ulid(), team.id, email, role, await sha256Hex(token), user.id,
+          now.toISOString(), new Date(now.getTime() + 7 * 86_400_000).toISOString(),
+        )
+        .run();
+      await sendMail(
+        env,
+        email,
+        `You're invited to MWK Studio`,
+        `${user.name ?? user.email} invited you to the "${team.name}" team on MWK Studio.\n\n` +
+          `Accept here (the link works once and expires in 7 days):\n\n` +
+          `${env.PUBLIC_ORIGIN}/auth/accept?token=${token}\n\n` +
+          `If you weren't expecting this, ignore it.`,
+      );
+      note = `Invite sent to ${email}.`;
+    }
+  } else if (action === 'revoke') {
+    await env.DB.prepare(
+      `UPDATE invite SET expires_at = ?1 WHERE id = ?2 AND team_id = ?3 AND accepted_at IS NULL`,
+    )
+      .bind(now.toISOString(), String(form.get('invite') ?? ''), team.id)
+      .run();
+    note = 'Invite revoked.';
+  }
+}
+
+const members = await env.DB.prepare(
+  `SELECT u.email, u.name, m.role, m.joined_at, u.last_login_at,
+          coalesce((SELECT sum(c.usd_micros) FROM charge c
+             JOIN run r ON r.id = c.run_id WHERE r.started_by = u.id AND c.team_id = ?1), 0) AS spent
+     FROM team_member m JOIN user u ON u.id = m.user_id
+    WHERE m.team_id = ?1 ORDER BY m.joined_at`,
+)
+  .bind(team.id)
+  .all<{ email: string; name: string | null; role: string; joined_at: string; last_login_at: string | null; spent: number }>();
+
+const pending = await env.DB.prepare(
+  `SELECT id, email, role, created_at, expires_at FROM invite
+    WHERE team_id = ?1 AND accepted_at IS NULL AND expires_at > ?2 ORDER BY created_at DESC`,
+)
+  .bind(team.id, new Date().toISOString())
+  .all<{ id: string; email: string; role: string; created_at: string; expires_at: string }>();
+---
+
+<Base title="Team" nav="team">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{team.name}</p>
+    <h1>Team</h1>
+    <p class="sub">Everything belongs to the team, never to a person. Sharing access is inviting someone.</p>
+  </div>
+
+  {error && <p class="flash">{error}</p>}
+  {note && <p class="flash">{note}</p>}
+
+  <div class="members">
+    {
+      members.results.map((m) => (
+        <div class="card member">
+          <b>{m.name ?? m.email}</b>
+          <span class="mono faint">{m.email}</span>
+          <span class="role mono">{m.role}</span>
+          <span class="money">{`$${(m.spent / 1_000_000).toFixed(4)}`} spent</span>
+        </div>
+      ))
+    }
+  </div>
+
+  {
+    isOwner(team) && (
+      <>
+        <form method="post" class="card invite-form">
+          <input type="hidden" name="action" value="invite" />
+          <p class="inventory mono">Invite someone — they get a one-time link, good for 7 days.</p>
+          <div class="row">
+            <label class="field" style="flex:1"><span>Email</span>
+              <input type="email" name="email" required /></label>
+            <label class="field" style="max-width:9rem"><span>Role</span>
+              <select name="role">
+                <option value="editor" selected>editor</option>
+                <option value="viewer">viewer</option>
+                <option value="owner">owner</option>
+              </select></label>
+          </div>
+          <button class="btn" type="submit">Send invite</button>
+        </form>
+
+        {pending.results.length > 0 && (
+          <div class="pending">
+            <p class="kicker"><span class="g">/</span>Pending invites</p>
+            {pending.results.map((i) => (
+              <div class="card member">
+                <b>{i.email}</b>
+                <span class="role mono">{i.role}</span>
+                <span class="mono faint">expires {i.expires_at.slice(0, 10)}</span>
+                <form method="post">
+                  <input type="hidden" name="action" value="revoke" />
+                  <input type="hidden" name="invite" value={i.id} />
+                  <button class="btn small ghost" type="submit">Revoke</button>
+                </form>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    )
+  }
+</Base>
+
+<style>
+  .members { margin-bottom: 2rem; }
+  .member { display: flex; gap: 1.2rem; align-items: baseline; flex-wrap: wrap; }
+  .member .role { color: var(--accent); font-size: 0.8rem; font-weight: 700; }
+  .member .faint { color: var(--faint); font-size: 0.85rem; }
+  .member form { margin-left: auto; }
+  .invite-form { max-width: 40rem; margin-bottom: 2rem; }
+  .invite-form .row { display: flex; gap: 1rem; }
+  .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
+  .pending .kicker { margin-bottom: 0.8rem; }
+</style>

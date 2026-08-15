@@ -310,6 +310,7 @@ for (const d of designs.results) {
               <figcaption>
                 <span>{g.items.length > 1 ? d.format_name : d.layout_name}</span>
                 <span class="mono faint">{d.format_slug} · {d.width}×{d.height}</span>
+                <a class="btn small ghost" href={`/projects/${slug}/preview?design=${d.id}`}>Preview</a>
                 <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`}>
                   Download
                 </a>

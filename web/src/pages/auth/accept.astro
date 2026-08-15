@@ -1,0 +1,76 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
+import { ulid } from '../../lib/ulid';
+import { randomToken, sha256Hex } from '../../lib/crypto';
+
+const env = ENV;
+const token = Astro.url.searchParams.get('token') ?? '';
+const now = new Date();
+
+if (token) {
+  // Single-use consume, same shape as the login link: one conditional UPDATE.
+  const invite = await env.DB.prepare(
+    `UPDATE invite SET accepted_at = ?1
+      WHERE token_hash = ?2 AND accepted_at IS NULL AND expires_at > ?1
+      RETURNING id, team_id, email, role`,
+  )
+    .bind(now.toISOString(), await sha256Hex(token))
+    .first<{ id: string; team_id: string; email: string; role: string }>();
+
+  if (invite) {
+    // The invite mail reached this address, which is exactly what a magic link
+    // proves — so acceptance signs the person in as that address.
+    let user = await env.DB.prepare(`SELECT id FROM user WHERE email = ?1 AND deactivated_at IS NULL`)
+      .bind(invite.email)
+      .first<{ id: string }>();
+    if (!user) {
+      const id = ulid();
+      await env.DB.prepare(`INSERT INTO user (id, email, created_at) VALUES (?1, ?2, ?3)`)
+        .bind(id, invite.email, now.toISOString())
+        .run();
+      user = { id };
+    }
+
+    const cookie = randomToken();
+    const expires = new Date(now.getTime() + 30 * 86_400_000);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO team_member (team_id, user_id, role, joined_at) VALUES (?1, ?2, ?3, ?4)`,
+      ).bind(invite.team_id, user.id, invite.role, now.toISOString()),
+      env.DB.prepare(`UPDATE invite SET accepted_user_id = ?1 WHERE id = ?2`).bind(user.id, invite.id),
+      env.DB.prepare(
+        `INSERT INTO session (id, user_id, created_at, expires_at, last_seen_at, user_agent)
+         VALUES (?1, ?2, ?3, ?4, ?3, ?5)`,
+      ).bind(
+        await sha256Hex(cookie), user.id, now.toISOString(), expires.toISOString(),
+        Astro.request.headers.get('user-agent'),
+      ),
+      env.DB.prepare(`UPDATE user SET last_login_at = ?1 WHERE id = ?2`).bind(now.toISOString(), user.id),
+    ]);
+    Astro.cookies.set('mwk_session', cookie, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: '/',
+      expires,
+    });
+    return Astro.redirect('/projects');
+  }
+}
+---
+
+<Base title="Invite">
+  <div class="accept-box">
+    <h1>That invite didn't work</h1>
+    <p class="sub">
+      Invite links work once and expire after 7 days. Ask the person who invited you for a
+      fresh one.
+    </p>
+  </div>
+</Base>
+
+<style>
+  .accept-box { max-width: 26rem; margin: 12vh auto 0; }
+  h1 { margin-bottom: 0.5rem; }
+</style>

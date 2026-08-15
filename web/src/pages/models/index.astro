@@ -1,9 +1,18 @@
 ---
 import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
 import { MODELS, PRICES_VERIFIED_ON } from '../../../../src/models.ts';
 
 const imageModels = MODELS.filter((m) => m.modality === 'image');
 const videoModels = MODELS.filter((m) => m.modality === 'video');
+
+// Latest observed facts from the nightly sync (append-only; may be empty pre-first-run).
+const catalog = await ENV.DB.prepare(
+  `SELECT model_id, run_count, model_updated_at FROM model_catalog
+    WHERE synced_at = (SELECT max(synced_at) FROM model_catalog)`,
+).all<{ model_id: string; run_count: number | null; model_updated_at: string | null }>();
+const observed = new Map(catalog.results.map((c) => [c.model_id, c]));
+const fmtRuns = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`);
 ---
 
 <Base title="Models" nav="models">
@@ -34,6 +43,8 @@ const videoModels = MODELS.filter((m) => m.modality === 'video');
           <div class="m-refs mono faint">
             {m.refStyle === 'none' ? 'no refs' : `${m.refStyle} · max ${m.maxRefs}`}
             {m.seedable ? ' · seed' : ''}
+            {observed.get(m.id)?.run_count != null ? ` · ${fmtRuns(observed.get(m.id)!.run_count!)} runs` : ''}
+            {observed.get(m.id)?.model_updated_at ? ` · updated ${observed.get(m.id)!.model_updated_at!.slice(0, 10)}` : ''}
           </div>
           <p class="m-notes">{m.notes}</p>
         </div>

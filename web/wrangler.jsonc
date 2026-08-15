@@ -18,7 +18,7 @@
   "services": [{ "binding": "ENGINE", "service": "mwk-studio-engine" }],
   "vars": {
     "PUBLIC_ORIGIN": "https://og.matewishkey.com",
-    "SES_FROM": "MWK Studio <studio@mergodon.com>",
+    "SES_FROM": "MWK Studio <studio@matewishkey.com>",
     "SES_REGION": "us-east-1"
   }
   // Secrets (wrangler secret put): SES_ACCESS_KEY_ID, SES_SECRET_ACCESS_KEY, SEAM_SECRET

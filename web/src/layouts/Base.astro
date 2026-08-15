@@ -40,6 +40,8 @@ const user = Astro.locals.user;
             <a href="/projects" aria-current={nav === 'projects' ? 'page' : undefined}>Projects</a>
             <a href="/styles" aria-current={nav === 'styles' ? 'page' : undefined}>Styles</a>
             <a href="/models" aria-current={nav === 'models' ? 'page' : undefined}>Models</a>
+            <a href="/history" aria-current={nav === 'history' ? 'page' : undefined}>History</a>
+            <a href="/team" aria-current={nav === 'team' ? 'page' : undefined}>Team</a>
             <button class="tt" id="theme-toggle" aria-label="Toggle theme" type="button">◐</button>
             <form method="post" action="/auth/logout"><button class="linkish" type="submit">Out</button></form>
           </div>

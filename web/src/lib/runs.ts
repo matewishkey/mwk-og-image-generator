@@ -63,13 +63,42 @@ export function toStyle(row: StyleRow): Style {
 export const usdToMicros = (usd: number): number => Math.round(usd * 1_000_000);
 export const microsToUsd = (m: number): string => `$${(m / 1_000_000).toFixed(4)}`;
 
-/** Estimate in micros for a grid of shots x models x iterations, no references. */
-export function estimateMicros(models: string[], tier: string | null, cells: number): number {
+/** Estimate in micros for a grid of cells. Mirrors run.ts estimate(): single-ref
+ *  models see one reference at most, so they are not charged for the whole pile. */
+export function estimateMicros(
+  models: string[],
+  tier: string | null,
+  cells: number,
+  refMp = 0,
+): number {
   const perRound = models.reduce((sum, alias) => {
     const spec = resolveModel(alias);
-    return sum + priceOf(spec, pickTier(spec, tier ?? undefined), 0, undefined);
+    return (
+      sum +
+      priceOf(spec, pickTier(spec, tier ?? undefined), spec.refStyle === 'single' ? 0 : refMp, undefined)
+    );
   }, 0);
   return usdToMicros(perRound * cells);
+}
+
+export interface ProjectRefs {
+  keys: string[];
+  megapixels: number;
+}
+
+/** The project's reference photos, in position order, with their real megapixels. */
+export async function loadProjectRefs(env: Env, projectId: string): Promise<ProjectRefs> {
+  const rows = await env.DB.prepare(
+    `SELECT r.r2_key, r.width, r.height FROM reference_use u
+       JOIN reference r ON r.id = u.reference_id
+      WHERE u.owner_type = 'project' AND u.owner_id = ?1 ORDER BY u.position`,
+  )
+    .bind(projectId)
+    .all<{ r2_key: string; width: number | null; height: number | null }>();
+  return {
+    keys: rows.results.map((r) => r.r2_key),
+    megapixels: rows.results.reduce((s, r) => s + ((r.width ?? 0) * (r.height ?? 0)) / 1_000_000, 0),
+  };
 }
 
 export interface CreateRunOpts {
@@ -91,16 +120,22 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
   const lease = new Date(now.getTime() + 30 * 60_000).toISOString();
   const runId = ulid();
   const style = toStyle(o.style);
-  const hasRefs = false; // reference plumbing lands with the upload UI
+  const refs = await loadProjectRefs(env, o.project.id);
+  const hasRefs = refs.keys.length > 0;
 
-  const estimated = estimateMicros(o.models, o.project.tier, o.shots.length * o.iterations);
+  const estimated = estimateMicros(
+    o.models,
+    o.project.tier,
+    o.shots.length * o.iterations,
+    refs.megapixels,
+  );
 
   const stmts = [
     env.DB.prepare(
       `INSERT INTO run (id, team_id, project_id, project_version, kind, status,
          estimated_micros, ref_megapixels, started_by, started_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, 0, ?7, ?8)`,
-    ).bind(runId, o.teamId, o.project.id, o.project.version, o.kind, estimated, o.userId, nowIso),
+       VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?9, ?7, ?8)`,
+    ).bind(runId, o.teamId, o.project.id, o.project.version, o.kind, estimated, o.userId, nowIso, refs.megapixels),
   ];
 
   const ideas: SeamIdea[] = [];
@@ -174,7 +209,7 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
       models: o.models,
       iterations: o.iterations,
       tier: o.project.tier ?? undefined,
-      refKeys: [],
+      refKeys: refs.keys,
       title: o.project.title ?? 'Mate *Wish* Key',
       kicker: o.project.kicker ?? undefined,
       tagline: o.project.tagline ?? undefined,

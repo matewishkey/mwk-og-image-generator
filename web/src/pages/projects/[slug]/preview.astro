@@ -1,0 +1,130 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ProjectTabs from '../../../components/ProjectTabs.astro';
+import { ENV } from '../../../lib/runtime';
+import { loadProject } from '../../../lib/data';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+const bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+
+// The design under preview: ?design=<id>, else the newest.
+const designId = Astro.url.searchParams.get('design');
+const design = await env.DB.prepare(
+  `SELECT d.id, d.title, d.tagline, d.r2_key, f.slug AS format_slug
+     FROM design d JOIN format f ON f.id = d.format_id
+    WHERE d.project_id = ?1 AND d.team_id = ?2 ${designId ? 'AND d.id = ?3' : ''}
+    ORDER BY d.created_at DESC LIMIT 1`,
+)
+  .bind(...(designId ? [bundle.project.id, team.id, designId] : [bundle.project.id, team.id]))
+  .first<{ id: string; title: string | null; tagline: string | null; r2_key: string; format_slug: string }>();
+
+const plainTitle = (design?.title ?? 'Mate Wish Key').replaceAll('*', '');
+const desc = design?.tagline ?? '';
+const img = design ? `/img/${design.r2_key}` : null;
+---
+
+<Base title={`${bundle.project.name} · preview`} nav="projects">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
+    <h1>Preview in context</h1>
+    <p class="sub">
+      The card where it will actually be seen — a feed card, a chat unfurl, a message
+      bubble. The mocks are generic on purpose; the pixels are yours.
+    </p>
+  </div>
+
+  <ProjectTabs slug={slug} active="design" />
+
+  {
+    !design ? (
+      <p class="sub">No designs yet — render one on the <a href={`/projects/${slug}/design`}>Design</a> tab.</p>
+    ) : (
+      <div class="mocks">
+        <section class="mock feed">
+          <p class="mock-label kicker"><span class="g">/</span>Feed card</p>
+          <div class="feed-post">
+            <div class="feed-head">
+              <span class="avatar" aria-hidden="true" />
+              <div>
+                <b>Mate Wish Key</b>
+                <span class="mono faint">@matewishkey · 2h</span>
+              </div>
+            </div>
+            <p class="feed-text">New post is up — link below.</p>
+            <div class="link-card">
+              <img src={img} alt="" />
+              <div class="link-meta">
+                <span class="mono faint">og.matewishkey.com</span>
+                <b>{plainTitle}</b>
+                {desc && <span class="desc">{desc}</span>}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mock chat">
+          <p class="mock-label kicker"><span class="g">/</span>Chat unfurl</p>
+          <div class="chat-msg">
+            <p class="chat-line"><b>mate</b> <span class="faint">09:41</span></p>
+            <p class="chat-line">have a look → https://matewishkey.com/post</p>
+            <div class="unfurl">
+              <b>{plainTitle}</b>
+              {desc && <span class="desc">{desc}</span>}
+              <img src={img} alt="" />
+            </div>
+          </div>
+        </section>
+
+        <section class="mock message">
+          <p class="mock-label kicker"><span class="g">/</span>Message bubble</p>
+          <div class="bubble-wrap">
+            <div class="bubble">
+              <img src={img} alt="" />
+              <span class="bubble-title">{plainTitle}<br /><span class="faint">og.matewishkey.com</span></span>
+            </div>
+          </div>
+        </section>
+      </div>
+    )
+  }
+</Base>
+
+<style>
+  .mocks { display: grid; grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr)); gap: 1.5rem; max-width: 90rem; }
+  .mocks > * { min-width: 0; }
+  .mock { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.25rem; }
+  .mock-label { margin-bottom: 1rem; }
+  .faint { color: var(--faint); }
+  .desc { color: var(--mute); font-size: 0.85rem; }
+
+  /* feed card */
+  .feed-post { max-width: 32rem; }
+  .feed-head { display: flex; gap: 0.6rem; align-items: center; margin-bottom: 0.6rem; }
+  .feed-head b { display: block; font-size: 0.92rem; }
+  .feed-head .mono { font-size: 0.78rem; }
+  .avatar { width: 2.4rem; height: 2.4rem; border-radius: 999px; background: var(--red); flex: none; }
+  .feed-text { font-size: 0.95rem; margin-bottom: 0.7rem; }
+  .link-card { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--paper); }
+  .link-card img { display: block; width: 100%; height: auto; }
+  .link-meta { display: grid; gap: 0.15rem; padding: 0.6rem 0.8rem; font-size: 0.85rem; }
+
+  /* chat unfurl */
+  .chat-msg { max-width: 32rem; font-size: 0.92rem; }
+  .chat-line { margin-bottom: 0.3rem; }
+  .chat-line + .chat-line { color: var(--accent); }
+  .unfurl { border-left: 4px solid var(--line); padding-left: 0.8rem; margin-top: 0.6rem; display: grid; gap: 0.3rem; }
+  .unfurl b { color: var(--accent); }
+  .unfurl img { width: 100%; max-width: 24rem; border-radius: 8px; margin-top: 0.3rem; }
+
+  /* message bubble */
+  .bubble-wrap { display: flex; justify-content: flex-end; max-width: 32rem; }
+  .bubble { background: var(--surface-2); border-radius: 18px; padding: 0.45rem; max-width: 19rem; }
+  .bubble img { display: block; width: 100%; border-radius: 14px 14px 4px 4px; }
+  .bubble-title { display: block; padding: 0.45rem 0.55rem 0.3rem; font-size: 0.8rem; font-weight: 700; }
+  .bubble-title .faint { font-weight: 400; font-size: 0.72rem; }
+</style>
