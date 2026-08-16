@@ -148,6 +148,52 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   format checkbox list for more ("every format" is one click, not the default —
   mate revised his earlier all-formats-default rule on 2026-08-16).
 - Every screen keeps a pasteable URL; filters live in the query string.
+- **Nothing is ever lost, and save state is VISIBLE** (round 3, after mate lost an edit to
+  a button click): the workspace autosaves every edit (debounced), every action flushes
+  pending saves first, the poll never clobbers a draft, and each shot carries a live
+  Saved/Unsaved badge. Any new editing surface must keep all four properties.
+
+## The workspace island — the one interactive surface
+
+Round 3 merged Shots + Takes into `/projects/<slug>/shots`: an Astro page shell mounting
+ONE Preact island (`web/src/components/Workspace.tsx`, `@astrojs/preact`) that talks JSON
+to `/api/*`. Everything else stays server-rendered forms — extend the island pattern only
+when a page genuinely needs live state (the design page is the flagged next candidate).
+Load-bearing details:
+
+- `lib/workspace.ts` `takesPayload()` builds the state for BOTH the page shell and
+  GET /api/…/takes (the island's poll) — one builder, so page and poll cannot drift.
+  `lib/media.ts` `refState()` is the same idea for references.
+- The poll merges server truth into local state but NEVER overwrites draft fields; the
+  autosave debounce is 800ms; failed saves retry after 3s. Hold-to-confirm is a Preact
+  `HoldButton` with the same timings/classes as the global `data-confirm` script.
+- The icon set lives in `components/icons.ts` — ONE source imported by Icon.astro and
+  the island. Add an icon there → add its /glossary row.
+- `/projects/<slug>/takes` 301s to the merged page; the old takes.json poll route is gone.
+- **Playwright gotcha**: `client:load` islands are server-rendered THEN hydrated — a test
+  that clicks before hydration hits dead buttons. Wait for
+  `astro-island:not([ssr])` before interacting (cost a full verify-run to find).
+
+## Multi-style, per-shot refs, character chaining (round 3 data model)
+
+- A project carries a style SET (`project_style`, migration 0010; `default_style_id`
+  stays as the primary). A run renders shots × styles × models × iterations; a shot
+  with `style_override_id` renders ONLY its override. `bundle.styles` everywhere.
+- **The style slug is part of a take's identity**: it joins the R2 take key, the cell
+  event (`EngineEvent.styleSlug`) and the take match in /internal/events, and the
+  `take_identity` unique index includes style_id (migration 0012 — the first live
+  two-style run failed the old index). createRun refuses a run where two styles share
+  a slug. runSweep renders an overridden idea ONCE, not once per loop style.
+- References attach at project scope ("every shot") or shot scope
+  (`reference_use.owner_type='shot'`); per-shot refs ride `SeamIdea.refKeys` and lead
+  the cell's ref list (single-ref models see the first image). Per-cell billing counts
+  what the model actually receives (capped at maxRefs; single = first ref only).
+- **`{shot N}` in a prompt chains characters**: createRun resolves shot N's picked
+  take's `art_key` (the RAW unbranded output — never the branded card) as a leading
+  reference and rewrites the token to "the character from reference image K". No pick
+  on shot N = the run refuses with a message naming the shot. The chain is resolved
+  web-side; the engine knows nothing about it.
+- Per-shot `ref_role` (0010) overrides the project's, via `SeamIdea.refRole`.
 
 ## The studio CLI — how Claude drives the site
 
@@ -184,6 +230,13 @@ lib/runs.ts) — change behaviour there, not in the routes.
   and content-addressed; there is no R2 backup beyond that.
 - **Style proofs** are real takes in the hidden per-team `_style-proofs` project (archived on
   purpose) — that is why they appear in History and the charge ledger with zero extra machinery.
+- **House styles**: 27 as of round 3 (9 original + 18 from the 2026-08-16 research sweep of
+  common OG-imagery looks). Source of truth is `styles/*.yaml`; NEW styles added after 0002
+  ship via `node web/scripts/gen-style-migration.mjs <NNNN_name.sql>`, which diffs the yaml
+  against every existing migration's `seed_style_*` ids.
+- **Co-write is an EXPANDER** (round 3): `suggestShotVariants` turns a short idea into
+  100–180 word scene-only production prompts (3 variants), preserves `{shot N}` tokens
+  verbatim, and knows whether refs/ref-role exist. Don't reintroduce a word cap.
 - **Deliberately NOT built** (decided with mate, 2026-08-15, "keep it simple"): Workflows as the
   per-take driver and Replicate webhooks (the container driver + lease sweep + idempotent re-runs
   cover it at this scale — revisit only if runs grow to where an abandoned run costs real money);
