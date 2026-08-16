@@ -46,6 +46,14 @@ export interface EngineRunRequest {
   refRole?: string;
   extra?: string;
   concurrency?: number;
+  /**
+   * The project's brand kit config (BrandConfig shape); absent = the engine's
+   * baked-in brand/brand.json. Without this, a team kit affects designs but
+   * never take cards.
+   */
+  brand?: unknown;
+  /** R2 key of an uploaded logo mark; overrides config.logo.mark when present. */
+  markKey?: string;
 }
 
 /**
@@ -100,6 +108,8 @@ export interface EngineRenderRequest {
   brand: unknown;
   /** Finish-pass preset (src/effects.ts) burned in as the last render step. */
   effect?: string;
+  /** R2 key of an uploaded logo mark; overrides config.logo.mark when present. */
+  markKey?: string;
   text: { title?: string; kicker?: string; tagline?: string };
   /** R2 art keys (never card keys — a band per panel looks absurd), inventory order. */
   panels: { key: string; label?: string }[];

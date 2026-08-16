@@ -21,6 +21,10 @@ export const GET: APIRoute = async (ctx) => {
       'content-type': obj.httpMetadata?.contentType ?? 'image/png',
       'cache-control': 'private, max-age=31536000, immutable',
       etag: obj.httpEtag,
+      // Uploaded SVG marks are served from here; a script inside one must
+      // never run in the app's origin when navigated to directly.
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
+      'x-content-type-options': 'nosniff',
     },
   });
 };

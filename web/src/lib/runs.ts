@@ -15,6 +15,7 @@ export interface ProjectRow {
   slug: string;
   name: string;
   default_style_id: string;
+  brand_kit_id: string;
   models: string;
   iterations: number;
   tier: string | null;
@@ -216,6 +217,11 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
   // the run failed rather than leaving takes queued forever.
   try {
     if (!env.ENGINE) throw new Error('ENGINE binding is not configured');
+    // The project's kit rides along so take CARDS carry the team's band, not
+    // the engine's baked-in house brand. Absent kit = engine falls back.
+    const kit = await env.DB.prepare(`SELECT config, mark_key FROM brand_kit WHERE id = ?1`)
+      .bind(o.project.brand_kit_id)
+      .first<{ config: string; mark_key: string | null }>();
     const payload: EngineRunRequest = {
       runId,
       r2Prefix: `teams/${o.teamId}/runs/${runId}`,
@@ -231,6 +237,8 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
       allowText: o.project.allow_text === 1,
       refRole: o.project.ref_role ?? undefined,
       extra: o.project.extra ?? undefined,
+      brand: kit ? JSON.parse(kit.config) : undefined,
+      markKey: kit?.mark_key ?? undefined,
     };
     const body = JSON.stringify(payload);
     const res = await env.ENGINE.fetch('https://engine/run', {

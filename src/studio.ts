@@ -15,7 +15,7 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
 
   styles                       list styles (house + team)
   projects                     list the team's projects
-  create -n <name> -s <style>  new project; -m models (default zturbo,pimage), -i iterations, -d description
+  create -n <name> -s <style>  new project; -m models (default zturbo,pimage), -i iterations, -d description, -k brand kit
   show <slug>                  project detail: settings + shots with ids
   add-shot <slug> -p <prompt>  add shot(s); repeat -p; --label names the first; --style overrides
   edit-shot <slug> <shot>      change a shot; -p prompt, --label label (shot = id, position or label)
@@ -138,6 +138,7 @@ async function cmdCreate(argv: string[]): Promise<void> {
       description: { type: 'string', short: 'd' },
       model: { type: 'string', short: 'm', multiple: true },
       iterations: { type: 'string', short: 'i' },
+      kit: { type: 'string', short: 'k' },
     },
   });
   if (!values.name) fail('-n <name> is required');
@@ -149,6 +150,7 @@ async function cmdCreate(argv: string[]): Promise<void> {
       name: values.name,
       description: values.description,
       style: values.style,
+      brandKit: values.kit,
       models: models.length ? models : ['zturbo', 'pimage'],
       iterations: values.iterations ? Number(values.iterations) : 1,
     },

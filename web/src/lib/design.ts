@@ -38,7 +38,9 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
       width: number;
       height: number;
     }>(),
-    env.DB.prepare(`SELECT config FROM brand_kit WHERE id = ?1`).bind(o.brandKitId).first<{ config: string }>(),
+    env.DB.prepare(`SELECT config, mark_key FROM brand_kit WHERE id = ?1`)
+      .bind(o.brandKitId)
+      .first<{ config: string; mark_key: string | null }>(),
   ]);
   if (!layout || !format || !kit) throw new Error('layout, format or brand kit missing');
 
@@ -60,6 +62,7 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
     height: format.height,
     layout: cfg,
     brand: JSON.parse(kit.config),
+    markKey: kit.mark_key ?? undefined,
     effect: o.effect,
     text: { title: o.title, kicker: o.kicker, tagline: o.tagline },
     panels: o.panels.slice(0, needed).map((p) => ({ key: p.artKey, label: p.label })),
@@ -127,7 +130,9 @@ export async function createCollection(
 ): Promise<{ rendered: number; failed: number }> {
   const [layout, kit] = await Promise.all([
     env.DB.prepare(`SELECT config FROM layout WHERE id = ?1`).bind(o.layoutId).first<{ config: string }>(),
-    env.DB.prepare(`SELECT config FROM brand_kit WHERE id = ?1`).bind(o.brandKitId).first<{ config: string }>(),
+    env.DB.prepare(`SELECT config, mark_key FROM brand_kit WHERE id = ?1`)
+      .bind(o.brandKitId)
+      .first<{ config: string; mark_key: string | null }>(),
   ]);
   if (!layout || !kit) throw new Error('layout or brand kit missing');
   const cfg = LayoutConfigSchema.parse(JSON.parse(layout.config));
@@ -159,6 +164,7 @@ export async function createCollection(
     outputs: plan.map((p) => p.out),
     layout: cfg,
     brand: JSON.parse(kit.config),
+    markKey: kit.mark_key ?? undefined,
     effect: o.effect,
     text: { title: o.title, kicker: o.kicker, tagline: o.tagline },
     panels: o.panels.slice(0, needed).map((p) => ({ key: p.artKey, label: p.label })),

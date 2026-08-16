@@ -32,6 +32,7 @@ export const POST: APIRoute = async (ctx) => {
     name?: string;
     description?: string;
     style?: string;
+    brandKit?: string;
     models?: string[];
     iterations?: number;
   }>(ctx.request);
@@ -45,6 +46,7 @@ export const POST: APIRoute = async (ctx) => {
     name: body.name,
     description: body.description,
     style: body.style,
+    brandKit: body.brandKit,
     models: body.models,
     iterations: body.iterations,
   });

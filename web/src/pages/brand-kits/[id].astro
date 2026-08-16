@@ -1,0 +1,316 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
+import { sniffMark } from '../../lib/media';
+import { BrandConfigSchema, type BrandConfig } from '../../../../src/brand-config.ts';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const id = Astro.params.id!;
+const loadKit = () =>
+  env.DB.prepare(
+    `SELECT b.*, t.kind AS team_kind FROM brand_kit b JOIN team t ON t.id = b.team_id
+      WHERE b.id = ?1 AND (b.team_id = ?2 OR t.kind = 'house') AND b.archived_at IS NULL`,
+  )
+    .bind(id, team.id)
+    .first<{
+      id: string; team_id: string; slug: string; name: string; config: string;
+      mark_key: string | null; default_title: string | null; default_kicker: string | null;
+      default_tagline: string | null; version: number; team_kind: string;
+    }>();
+
+let kit = await loadKit();
+if (!kit) return new Response('Not found', { status: 404 });
+const editable = kit.team_kind !== 'house';
+
+let error = '';
+let note = '';
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const now = new Date().toISOString();
+
+  if (action === 'mark') {
+    const file = form.get('mark');
+    if (file instanceof File && file.size > 0) {
+      if (file.size > 1024 * 1024) error = 'A mark should be under 1 MB.';
+      else {
+        const bytes = await file.arrayBuffer();
+        const info = sniffMark(bytes);
+        if (!info) error = 'A mark must be a PNG (with transparency) or an SVG.';
+        else {
+          const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join('');
+          const key = `teams/${team.id}/brand/${digest}${info.ext}`;
+          await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: info.mime } });
+          await env.DB.prepare(
+            `UPDATE brand_kit SET mark_key=?1, version=version+1, updated_at=?2 WHERE id=?3 AND team_id=?4`,
+          )
+            .bind(key, now, kit.id, team.id)
+            .run();
+          return Astro.redirect(`/brand-kits/${kit.id}`);
+        }
+      }
+    } else error = 'Pick a file first.';
+  } else if (action === 'edit') {
+    const name = String(form.get('name') ?? '').trim();
+    if (!name) error = 'A kit needs a name.';
+    else {
+      // Rebuild the config from the flattened fields over the stored one.
+      // logo.mark and every font family/file pass through untouched — fonts
+      // are baked into the engine image, not kit payload.
+      const cur = JSON.parse(kit.config) as BrandConfig;
+      const num = (k: string, fallback: number): number => {
+        const v = Number(String(form.get(k) ?? ''));
+        return Number.isFinite(v) && String(form.get(k) ?? '') !== '' ? v : fallback;
+      };
+      const str = (k: string, fallback: string): string =>
+        String(form.get(k) ?? '').trim() || fallback;
+      const draft = {
+        ...cur,
+        colors: {
+          paper: str('colors.paper', cur.colors.paper),
+          ink: str('colors.ink', cur.colors.ink),
+          mute: str('colors.mute', cur.colors.mute),
+          faint: str('colors.faint', cur.colors.faint),
+          red: str('colors.red', cur.colors.red),
+          redField: str('colors.redField', cur.colors.redField),
+          redDeep: str('colors.redDeep', cur.colors.redDeep),
+          line: str('colors.line', cur.colors.line),
+          onRed: str('colors.onRed', cur.colors.onRed),
+        },
+        scrim: {
+          startY: num('scrim.startY', cur.scrim.startY),
+          opacity: num('scrim.opacity', cur.scrim.opacity),
+        },
+        band: {
+          height: num('band.height', cur.band.height),
+          opacity: num('band.opacity', cur.band.opacity),
+          ruleHeight: num('band.ruleHeight', cur.band.ruleHeight),
+        },
+        logo: {
+          ...cur.logo,
+          size: num('logo.size', cur.logo.size),
+          markScale: num('logo.markScale', cur.logo.markScale),
+          x: num('logo.x', cur.logo.x),
+        },
+        title: {
+          ...cur.title,
+          size: num('title.size', cur.title.size),
+          weight: num('title.weight', cur.title.weight),
+          gap: num('title.gap', cur.title.gap),
+        },
+        kicker: {
+          ...cur.kicker,
+          size: num('kicker.size', cur.kicker.size),
+          weight: num('kicker.weight', cur.kicker.weight),
+          trackingEm: num('kicker.trackingEm', cur.kicker.trackingEm),
+          gapBelow: num('kicker.gapBelow', cur.kicker.gapBelow),
+        },
+        tagline: {
+          ...cur.tagline,
+          size: num('tagline.size', cur.tagline.size),
+          weight: num('tagline.weight', cur.tagline.weight),
+          gapAbove: num('tagline.gapAbove', cur.tagline.gapAbove),
+        },
+      };
+      const parsed = BrandConfigSchema.safeParse(draft);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0]!;
+        error = `${issue.path.join('.')}: ${issue.message}`;
+      } else {
+        await env.DB.prepare(
+          `UPDATE brand_kit SET name=?1, config=?2, default_title=?3, default_kicker=?4,
+             default_tagline=?5, version=version+1, updated_at=?6
+           WHERE id=?7 AND team_id=?8`,
+        )
+          .bind(
+            name,
+            JSON.stringify(draft),
+            String(form.get('default_title') ?? '').trim() || null,
+            String(form.get('default_kicker') ?? '').trim() || null,
+            String(form.get('default_tagline') ?? '').trim() || null,
+            now,
+            kit.id,
+            team.id,
+          )
+          .run();
+        note = 'Saved. New renders use this version; existing designs and takes never change.';
+        kit = (await loadKit())!;
+      }
+    }
+  }
+}
+
+const c = (JSON.parse(kit.config) as BrandConfig);
+const previewTitle = (kit.default_title ?? 'Your *Brand* Here').split(/\*([^*]+)\*/);
+---
+
+<Base title={`${kit.name} · brand kit`} nav="brand">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{kit.team_kind === 'house' ? 'house kit' : 'your kit'} · v{kit.version}</p>
+    <h1>{kit.name}</h1>
+    {!editable && <p class="sub">House kits are read-only — duplicate one from <a href="/brand-kits">the library</a> to edit.</p>}
+    {editable && <p class="sub">Every save is a new version. Old designs and takes keep the band they were rendered with.</p>}
+  </div>
+
+  {error && <p class="flash">{error}</p>}
+  {note && <p class="flash">{note}</p>}
+
+  <div class="kit-cols">
+    <form method="post" class="kit-form">
+      <input type="hidden" name="action" value="edit" />
+      <fieldset disabled={!editable}>
+        <p class="kicker"><span class="g">/</span>Identity</p>
+        <label class="field"><span>Name</span><input type="text" name="name" value={kit.name} required /></label>
+        <div class="form-grid">
+          <label class="field"><span>Default title — *word* renders red</span>
+            <input type="text" name="default_title" value={kit.default_title ?? ''} /></label>
+          <label class="field"><span>Default kicker</span>
+            <input type="text" name="default_kicker" value={kit.default_kicker ?? ''} /></label>
+          <label class="field"><span>Default tagline</span>
+            <input type="text" name="default_tagline" value={kit.default_tagline ?? ''} /></label>
+        </div>
+
+        <p class="kicker"><span class="g">/</span>Colours — #rrggbb</p>
+        <div class="color-grid">
+          {Object.entries(c.colors).map(([key, val]) => (
+            <label class="field color-field"><span>{key}</span>
+              <span class="color-row">
+                <input type="text" name={`colors.${key}`} value={val} pattern="#[0-9a-fA-F]{6}" class="mono" />
+                <span class="swatch" style={`background:${val}`} />
+              </span>
+            </label>
+          ))}
+        </div>
+
+        <p class="kicker"><span class="g">/</span>Band &amp; geometry</p>
+        <div class="form-grid">
+          <label class="field"><span>Band height (px of 630)</span>
+            <input type="number" name="band.height" value={c.band.height} min="60" max="300" /></label>
+          <label class="field"><span>Band opacity</span>
+            <input type="number" name="band.opacity" value={c.band.opacity} min="0" max="1" step="0.01" /></label>
+          <label class="field"><span>Rule height</span>
+            <input type="number" name="band.ruleHeight" value={c.band.ruleHeight} min="0" max="20" /></label>
+          <label class="field"><span>Scrim starts at (px)</span>
+            <input type="number" name="scrim.startY" value={c.scrim.startY} min="0" max="629" /></label>
+          <label class="field"><span>Scrim opacity</span>
+            <input type="number" name="scrim.opacity" value={c.scrim.opacity} min="0" max="1" step="0.01" /></label>
+          <label class="field"><span>RedBlock size (px)</span>
+            <input type="number" name="logo.size" value={c.logo.size} min="24" max="200" /></label>
+          <label class="field"><span>Mark scale (of block)</span>
+            <input type="number" name="logo.markScale" value={c.logo.markScale} min="0.2" max="1" step="0.01" /></label>
+          <label class="field"><span>Left inset (px)</span>
+            <input type="number" name="logo.x" value={c.logo.x} min="0" max="400" /></label>
+        </div>
+
+        <p class="kicker"><span class="g">/</span>Type — faces are fixed; sizes and weights are yours</p>
+        <div class="form-grid">
+          <label class="field"><span>Title size ({c.title.family})</span>
+            <input type="number" name="title.size" value={c.title.size} min="8" max="120" /></label>
+          <label class="field"><span>Title weight</span>
+            <input type="number" name="title.weight" value={c.title.weight} min="100" max="1000" step="50" /></label>
+          <label class="field"><span>Title gap after block</span>
+            <input type="number" name="title.gap" value={c.title.gap} min="0" max="120" /></label>
+          <label class="field"><span>Kicker size ({c.kicker.family})</span>
+            <input type="number" name="kicker.size" value={c.kicker.size} min="8" max="120" /></label>
+          <label class="field"><span>Kicker weight</span>
+            <input type="number" name="kicker.weight" value={c.kicker.weight} min="100" max="1000" step="50" /></label>
+          <label class="field"><span>Kicker tracking (em)</span>
+            <input type="number" name="kicker.trackingEm" value={c.kicker.trackingEm} min="0" max="1" step="0.01" /></label>
+          <label class="field"><span>Kicker gap below</span>
+            <input type="number" name="kicker.gapBelow" value={c.kicker.gapBelow} min="0" max="60" /></label>
+          <label class="field"><span>Tagline size ({c.tagline.family})</span>
+            <input type="number" name="tagline.size" value={c.tagline.size} min="8" max="120" /></label>
+          <label class="field"><span>Tagline weight</span>
+            <input type="number" name="tagline.weight" value={c.tagline.weight} min="100" max="1000" step="50" /></label>
+          <label class="field"><span>Tagline gap above</span>
+            <input type="number" name="tagline.gapAbove" value={c.tagline.gapAbove} min="0" max="60" /></label>
+        </div>
+
+        {editable && <button class="btn" type="submit">Save kit</button>}
+      </fieldset>
+    </form>
+
+    <aside class="kit-side">
+      <p class="kicker"><span class="g">/</span>Mark</p>
+      <div class="mark-box">
+        <span class="mark-block" style={`background:${c.colors.red}`}>
+          {kit.mark_key
+            ? <img src={`/img/${kit.mark_key}`} alt="mark" style={`width:${c.logo.markScale * 100}%`} />
+            : <span class="mark-note">house mark<br />(baked into the engine)</span>}
+        </span>
+      </div>
+      {editable && (
+        <form method="post" enctype="multipart/form-data" class="mark-upload">
+          <input type="hidden" name="action" value="mark" />
+          <input type="file" name="mark" accept="image/png,image/svg+xml" required />
+          <button class="btn small" type="submit">Upload mark</button>
+          <p class="hint">PNG with transparency or SVG, under 1 MB. It lands centred on the red block.</p>
+        </form>
+      )}
+
+      <p class="kicker" style="margin-top:2rem"><span class="g">/</span>Band preview — approximate; render a design for real pixels</p>
+      <div class="mock" style={`background:${c.colors.paper}`}>
+        <div class="mock-band" style={`background:${c.colors.paper}; height:${(c.band.height / 630) * 100 * 2.4}px; border-top:${c.band.ruleHeight}px solid ${c.colors.red}`}>
+          <span class="mock-block" style={`background:${c.colors.red}; width:${(c.logo.size / 630) * 100 * 2.4}px; margin-left:${(c.logo.x / 1200) * 100}%`}>
+            {kit.mark_key && <img src={`/img/${kit.mark_key}`} alt="" style={`width:${c.logo.markScale * 100}%`} />}
+          </span>
+          <span class="mock-text">
+            {kit.default_kicker && (
+              <span class="mock-kicker" style={`color:${c.colors.redDeep}; letter-spacing:${c.kicker.trackingEm}em`}>
+                {kit.default_kicker.toUpperCase()}
+              </span>
+            )}
+            <span class="mock-title" style={`color:${c.colors.ink}; font-size:${c.title.size / 24}rem`}>
+              {previewTitle.map((part, i) =>
+                i % 2 === 1 ? <em style={`color:${c.colors.redDeep}`}>{part}</em> : part,
+              )}
+            </span>
+            {kit.default_tagline && (
+              <span class="mock-tag" style={`color:${c.colors.mute}; font-size:${c.tagline.size / 24}rem`}>
+                {kit.default_tagline}
+              </span>
+            )}
+          </span>
+        </div>
+      </div>
+    </aside>
+  </div>
+</Base>
+
+<style>
+  .kit-cols { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 2.5rem; align-items: start; }
+  @media (width <= 1000px) { .kit-cols { grid-template-columns: 1fr; } }
+  .kit-form fieldset { border: 0; display: grid; gap: 0.2rem; }
+  .kit-form .kicker { margin: 1.4rem 0 0.8rem; }
+  .kit-form .kicker:first-child { margin-top: 0; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0 1rem; }
+  .form-grid > * { min-width: 0; }
+  .color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0 1rem; }
+  .color-row { display: flex; gap: 0.4rem; align-items: center; }
+  .color-row input { flex: 1; min-width: 0; }
+  .swatch { width: 2.1rem; height: 2.1rem; border-radius: var(--radius); border: 1px solid var(--line); flex: none; }
+  .kit-side { position: sticky; top: 2rem; }
+  .mark-box { margin-bottom: 0.8rem; }
+  .mark-block { width: 7rem; aspect-ratio: 1; display: grid; place-items: center; }
+  .mark-block img { height: auto; }
+  .mark-note { color: #fff; font-size: 0.68rem; text-align: center; opacity: 0.85; }
+  .mark-upload { display: grid; gap: 0.5rem; justify-items: start; }
+  .mark-upload input[type=file] { background: none; border: 0; padding: 0; color: var(--mute); font-size: 0.85rem; }
+  .hint { color: var(--faint); font-size: 0.78rem; }
+  .kit-side .kicker { margin-bottom: 0.8rem; }
+  .mock { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; aspect-ratio: 1200/630; display: flex; align-items: flex-end; }
+  .mock-band { width: 100%; display: flex; align-items: center; gap: 4%; }
+  .mock-block { aspect-ratio: 1; display: grid; place-items: center; flex: none; }
+  .mock-block img { height: auto; }
+  .mock-text { display: grid; gap: 0.25rem; min-width: 0; }
+  .mock-kicker { font: 700 0.55rem/1 var(--font-mono); }
+  .mock-title { font-family: var(--font-display), Georgia, serif; font-weight: 700; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mock-title em { font-style: normal; }
+  .mock-tag { font-family: var(--font-body); line-height: 1.3; }
+</style>

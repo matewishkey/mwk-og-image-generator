@@ -11,6 +11,8 @@ export interface CreateProjectOpts {
   description?: string;
   /** Style id or slug, resolved against team-or-house styles (team wins). */
   style: string;
+  /** Brand kit id or slug; omitted = the team's kit, falling back to house. */
+  brandKit?: string;
   models: string[];
   iterations?: number;
 }
@@ -37,15 +39,25 @@ export async function createProject(env: Env, o: CreateProjectOpts): Promise<Cre
     .first<{ id: string }>();
   if (!style) return { error: `No style "${o.style}".`, status: 400 };
 
-  const kit = await env.DB.prepare(
-    `SELECT b.id, b.default_title, b.default_tagline FROM brand_kit b
-       JOIN team t ON t.id = b.team_id
-      WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
-      ORDER BY t.kind DESC LIMIT 1`,
-  )
-    .bind(o.teamId)
-    .first<{ id: string; default_title: string | null; default_tagline: string | null }>();
-  if (!kit) return { error: 'No brand kit available.', status: 400 };
+  const kit = o.brandKit
+    ? await env.DB.prepare(
+        `SELECT b.id, b.default_title, b.default_tagline FROM brand_kit b
+           JOIN team t ON t.id = b.team_id
+          WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
+            AND (b.id = ?2 OR b.slug = ?2)
+          ORDER BY t.kind DESC LIMIT 1`,
+      )
+        .bind(o.teamId, o.brandKit)
+        .first<{ id: string; default_title: string | null; default_tagline: string | null }>()
+    : await env.DB.prepare(
+        `SELECT b.id, b.default_title, b.default_tagline FROM brand_kit b
+           JOIN team t ON t.id = b.team_id
+          WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
+          ORDER BY t.kind DESC LIMIT 1`,
+      )
+        .bind(o.teamId)
+        .first<{ id: string; default_title: string | null; default_tagline: string | null }>();
+  if (!kit) return { error: o.brandKit ? `No brand kit "${o.brandKit}".` : 'No brand kit available.', status: 400 };
 
   const slug = slugify(name) || ulid().toLowerCase();
   const now = new Date().toISOString();

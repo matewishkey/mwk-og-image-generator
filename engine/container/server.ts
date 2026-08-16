@@ -26,6 +26,7 @@ import {
 } from '../../src/seam.ts';
 import { runText } from '../../src/replicate.ts';
 import { loadBrand, type BrandConfig } from '../../src/brand.ts';
+import { BrandConfigSchema } from '../../src/brand-config.ts';
 import { renderDesign } from './layout.ts';
 import { applyEffect } from './effects.ts';
 
@@ -86,7 +87,29 @@ async function postEvent(event: EngineEvent): Promise<void> {
 
 const activeRuns = new Set<string>();
 
-async function executeRun(req: EngineRunRequest, refBytes: Buffer[]): Promise<void> {
+/**
+ * Materialise an uploaded logo mark (R2) as a local file so brand.ts's
+ * readFile path works unchanged. Keys are content-addressed, so caching by
+ * key is sound for the life of the instance.
+ */
+const markCache = new Map<string, string>();
+async function localMark(markKey: string): Promise<string> {
+  const hit = markCache.get(markKey);
+  if (hit) return hit;
+  const p = join(tmpdir(), `mark-${markKey.split('/').pop()}`);
+  await writeFile(p, new Uint8Array(await r2Get(markKey)));
+  markCache.set(markKey, p);
+  return p;
+}
+
+/** Validate a kit off the seam (a cast let a broken kit crash pango mid-render). */
+async function resolveBrand(raw: unknown, markKey?: string): Promise<BrandConfig> {
+  let brand = raw ? BrandConfigSchema.parse(raw) : await loadBrand();
+  if (markKey) brand = { ...brand, logo: { ...brand.logo, mark: await localMark(markKey) } };
+  return brand;
+}
+
+async function executeRun(req: EngineRunRequest, refBytes: Buffer[], brand: BrandConfig): Promise<void> {
   const outDir = join(tmpdir(), `run-${req.runId}`);
   await mkdir(outDir, { recursive: true });
   const uploads: Promise<void>[] = [];
@@ -118,6 +141,7 @@ async function executeRun(req: EngineRunRequest, refBytes: Buffer[]): Promise<vo
       allowText: req.allowText,
       refRole: req.refRole,
       extra: req.extra,
+      brand,
       outDir,
       concurrency: req.concurrency ?? 4,
     };
@@ -250,7 +274,7 @@ const server = createServer((req, res) => {
       if (req.url === '/render') {
         const r = JSON.parse(body) as EngineRenderRequest;
         const cfg = LayoutConfigSchema.parse(r.layout);
-        const brand = r.brand ? (r.brand as BrandConfig) : await loadBrand();
+        const brand = await resolveBrand(r.brand, r.markKey);
         const panels = [];
         for (const pnl of r.panels) panels.push({ buf: await r2Get(pnl.key), label: pnl.label });
 
@@ -288,11 +312,13 @@ const server = createServer((req, res) => {
         res.writeHead(202).end('already running');
         return;
       }
-      // Fetch refs before acknowledging, so a bad key fails the request, not the run.
+      // Resolve refs and the kit before acknowledging, so a bad key or a broken
+      // kit fails the request (createRun marks the run failed/dispatch), not the run.
       const refBytes: Buffer[] = [];
       for (const key of parsed.refKeys) refBytes.push(await r2Get(key));
+      const runBrand = await resolveBrand(parsed.brand, parsed.markKey);
       activeRuns.add(parsed.runId);
-      executeRun(parsed, refBytes).catch((e) => console.error(`run ${parsed.runId}:`, e));
+      executeRun(parsed, refBytes, runBrand).catch((e) => console.error(`run ${parsed.runId}:`, e));
       res.writeHead(202, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ accepted: parsed.runId }));
     } catch (e) {

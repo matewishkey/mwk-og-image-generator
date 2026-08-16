@@ -15,33 +15,10 @@ import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import type { OverlayOptions } from 'sharp';
 
-export interface FontSpec {
-  family: string;
-  file: string;
-  size: number;
-  weight: number;
-}
-
-export interface BrandConfig {
-  canvas: { width: number; height: number };
-  colors: {
-    paper: string;
-    ink: string;
-    mute: string;
-    faint: string;
-    red: string;
-    redField: string;
-    redDeep: string;
-    line: string;
-    onRed: string;
-  };
-  scrim: { startY: number; opacity: number };
-  band: { height: number; opacity: number; ruleHeight: number };
-  logo: { mark: string; size: number; markScale: number; x: number };
-  title: FontSpec & { gap: number };
-  kicker: FontSpec & { trackingEm: number; gapBelow: number };
-  tagline: FontSpec & { gapAbove: number };
-}
+// The shape (and its zod schema) lives in brand-config.ts — a PURE module the
+// web worker can import; this file pulls in sharp and is worker-excluded.
+export type { BrandConfig, FontSpec } from './brand-config.ts';
+import type { BrandConfig, FontSpec } from './brand-config.ts';
 
 export async function loadBrand(path = 'brand/brand.json'): Promise<BrandConfig> {
   return JSON.parse(await readFile(path, 'utf8')) as BrandConfig;

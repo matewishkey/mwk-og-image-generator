@@ -1,0 +1,125 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ENV } from '../../lib/runtime';
+import { ulid } from '../../lib/ulid';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+let error = '';
+let note = '';
+
+const listKits = () =>
+  env.DB.prepare(
+    `SELECT b.id, b.slug, b.name, b.config, b.mark_key, b.default_title, b.version,
+            t.kind AS team_kind
+       FROM brand_kit b JOIN team t ON t.id = b.team_id
+      WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
+      ORDER BY t.kind DESC, b.name`,
+  )
+    .bind(team.id)
+    .all<{
+      id: string; slug: string; name: string; config: string; mark_key: string | null;
+      default_title: string | null; version: number; team_kind: string;
+    }>();
+
+let kits = await listKits();
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  if (String(form.get('action') ?? '') === 'duplicate') {
+    const src = kits.results.find((k) => k.id === String(form.get('kit')));
+    if (src) {
+      const full = await env.DB.prepare(`SELECT * FROM brand_kit WHERE id = ?1`)
+        .bind(src.id)
+        .first<Record<string, unknown>>();
+      if (full) {
+        try {
+          await env.DB.prepare(
+            `INSERT INTO brand_kit (id, team_id, slug, name, config, mark_key,
+               default_title, default_kicker, default_tagline, forked_from_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)`,
+          )
+            .bind(ulid(), team.id, `${full.slug}-copy`, `${full.name} (copy)`, full.config,
+                  full.mark_key, full.default_title, full.default_kicker, full.default_tagline,
+                  full.id, new Date().toISOString())
+            .run();
+          note = `Duplicated "${full.name}" into your library — open it to edit.`;
+        } catch (e) {
+          error = /UNIQUE/.test((e as Error).message) ? 'A copy already exists.' : (e as Error).message;
+        }
+      }
+    }
+    kits = await listKits();
+  }
+}
+
+interface KitColors { paper: string; ink: string; red: string; redDeep: string; mute: string }
+const colorsOf = (config: string): KitColors => JSON.parse(config).colors;
+---
+
+<Base title="Brand kits" nav="brand">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>Library</p>
+    <h1>Brand kits</h1>
+    <p class="sub">
+      The band, the colours, the type — what makes a card yours. The house kit is
+      read-only; duplicate it to make your own.
+    </p>
+  </div>
+
+  {error && <p class="flash">{error}</p>}
+  {note && <p class="flash">{note}</p>}
+
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(24rem,1fr))">
+    {
+      kits.results.map((k) => {
+        const c = colorsOf(k.config);
+        return (
+          <div class="card kit-card">
+            <p class="kicker"><span class="g">/</span>{k.team_kind === 'house' ? 'house' : 'yours'} · v{k.version}</p>
+            <h2><a href={`/brand-kits/${k.id}`}>{k.name}</a></h2>
+            {k.default_title && <p class="sub">“{k.default_title.replaceAll('*', '')}”</p>}
+            <div class="band-swatch" style={`background:${c.paper}`}>
+              <span class="sw-block" style={`background:${c.red}`}>
+                {k.mark_key && <img src={`/img/${k.mark_key}`} alt="" />}
+              </span>
+              <span class="sw-lines">
+                <span class="sw-title" style={`background:${c.ink}`} />
+                <span class="sw-tag" style={`background:${c.mute}`} />
+              </span>
+              <span class="sw-rule" style={`background:${c.red}`} />
+            </div>
+            <div class="row-actions">
+              <a class="btn small ghost" href={`/brand-kits/${k.id}`}>Open</a>
+              <form method="post">
+                <input type="hidden" name="action" value="duplicate" />
+                <input type="hidden" name="kit" value={k.id} />
+                <button class="btn small ghost" type="submit">Duplicate</button>
+              </form>
+            </div>
+          </div>
+        );
+      })
+    }
+  </div>
+</Base>
+
+<style>
+  .kit-card h2 { font-size: 1.1rem; margin: 0.3rem 0; }
+  .kit-card h2 a { color: var(--ink); }
+  .band-swatch {
+    position: relative;
+    display: flex; align-items: center; gap: 0.8rem;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 0.9rem 1rem; margin: 0.8rem 0;
+  }
+  .sw-block { width: 2.6rem; aspect-ratio: 1; display: grid; place-items: center; flex: none; }
+  .sw-block img { width: 64%; height: auto; }
+  .sw-lines { display: grid; gap: 0.45rem; flex: 1; }
+  .sw-title { height: 0.7rem; width: 62%; }
+  .sw-tag { height: 0.45rem; width: 42%; }
+  .sw-rule { position: absolute; inset: 0 0 auto 0; height: 3px; border-radius: var(--radius) var(--radius) 0 0; }
+  .row-actions { display: flex; gap: 0.5rem; }
+</style>

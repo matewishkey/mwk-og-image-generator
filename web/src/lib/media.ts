@@ -76,6 +76,29 @@ export async function listLibrary(env: Env, teamId: string): Promise<LibraryRef[
   return rows.results;
 }
 
+export interface MarkInfo {
+  mime: string;
+  ext: string;
+}
+
+/**
+ * Sniff an uploaded logo MARK: PNG (transparency) or SVG. JPEG/WebP are
+ * rejected on purpose — a mark without alpha turns the RedBlock into a photo
+ * tile. SVG never passes sniffImage, so it's detected by content here.
+ */
+export function sniffMark(bytes: ArrayBuffer): MarkInfo | null {
+  const png = sniffImage(bytes);
+  if (png?.mime === 'image/png') return { mime: png.mime, ext: png.ext };
+  if (png) return null; // JPEG/WebP: no alpha, not a mark
+  const head = new TextDecoder('utf-8', { fatal: false })
+    .decode(bytes.slice(0, 512))
+    .replace(/^﻿/, '')
+    .trimStart();
+  if (head.startsWith('<svg') || (head.startsWith('<?xml') && head.includes('<svg')))
+    return { mime: 'image/svg+xml', ext: '.svg' };
+  return null;
+}
+
 /** Set (or clear) a reference's friendly name. Team id in the WHERE is the authz. */
 export async function renameReference(
   env: Env,

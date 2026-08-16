@@ -84,7 +84,15 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   (`CLOUDFLARE_DEPLOY_TOKEN` in td-sops), the default env token lacks the Containers
   permission.
 - `src/seam.ts` is the wire protocol, HMAC both directions, one module imported by both
-  sides. **Secrets live where they are used:** the web worker holds SES + `SEAM_SECRET`;
+  sides. **SeamIdea.prompt is the shot's RAW idea** — the engine composes it with the
+  style exactly once. Sending a composed prompt re-composes it (the 2026-08-16
+  double-compose bug: every take's billed prompt carried the style text twice).
+  Per-shot style overrides ride as `SeamIdea.style`; the project's brand kit rides as
+  `EngineRunRequest.brand` + `markKey` so take CARDS carry the team band, with
+  `EngineRenderRequest` doing the same for designs. The engine materialises `markKey`
+  from R2 to a temp file and validates every kit with `BrandConfigSchema`
+  (src/brand-config.ts — the PURE module; brand.ts re-exports its types because the
+  worker can't import sharp). **Secrets live where they are used:** the web worker holds SES + `SEAM_SECRET`;
   the engine holds `REPLICATE_API_TOKEN`, R2 S3 keys and `SEAM_SECRET`. The web app never
   holds Replicate or R2 credentials — keep it that way.
 - Astro v6+ removed `Astro.locals.runtime.env`; bindings come from
@@ -92,6 +100,13 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   that touches it.
 - House styles and the house brand kit are seeded from `styles/*.yaml` and
   `brand/brand.json` by `web/scripts/gen-seed.mjs` → migration `0002_seed.sql`.
+- `/brand-kits` is the kit library + editor (duplicate-house-to-edit, flattened config
+  form validated by BrandConfigSchema before save, PNG/SVG mark upload → R2 `mark_key`,
+  CSS mock preview labelled approximate). House kits are read-only. Uploaded SVGs are
+  served from /img with a lockdown CSP — keep that header.
+- Finish presets (`design.effect`: grain/vignette/glow/fade) are deterministic sharp
+  passes applied engine-side AFTER compositing (engine/container/effects.ts, metadata in
+  src/effects.ts). Never an AI polish pass — same reason branding is composited.
 - The build plan (final, reviewed): https://work.l/mat-mwk-og-image-generator/2026-08-14_plan/
 
 ## UI rules mate has set — don't regress these

@@ -78,6 +78,8 @@ export interface RunOpts {
   /** Who the reference person is in the scene. See ComposeOpts.refRole. */
   refRole?: string;
   extra?: string;
+  /** Brand to composite; absent = load brand/brand.json off disk (CLI path). */
+  brand?: BrandConfig;
   outDir: string;
   concurrency: number;
   /** Called as each cell settles, for progress output. */
@@ -222,7 +224,7 @@ async function runCell(
 }
 
 export async function runSweep(opts: RunOpts): Promise<RunManifest> {
-  const brand = await loadBrand();
+  const brand = opts.brand ?? (await loadBrand());
   await mkdir(join(opts.outDir, 'art'), { recursive: true });
   await mkdir(join(opts.outDir, 'og'), { recursive: true });
   if (opts.models.some((m) => m.modality === 'video')) {

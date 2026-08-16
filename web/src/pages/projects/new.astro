@@ -18,6 +18,14 @@ const styles = await env.DB.prepare(
   .bind(team.id)
   .all<{ id: string; slug: string; name: string; description: string; team_kind: string }>();
 
+const kits = await env.DB.prepare(
+  `SELECT b.id, b.name, t.kind AS team_kind FROM brand_kit b JOIN team t ON t.id = b.team_id
+    WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
+    ORDER BY t.kind DESC, b.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; name: string; team_kind: string }>();
+
 const imageModels = MODELS.filter((m) => m.modality === 'image');
 const DEFAULT_CHECKED = new Set(['zturbo', 'pimage']);
 
@@ -33,6 +41,7 @@ if (Astro.request.method === 'POST') {
       name: String(form.get('name') ?? ''),
       description: String(form.get('description') ?? ''),
       style: styleId,
+      brandKit: String(form.get('brandkit') ?? '') || undefined,
       models: form.getAll('models').map(String),
       iterations: Number(form.get('iterations') ?? 1),
     });
@@ -93,10 +102,20 @@ if (Astro.request.method === 'POST') {
         ))}
       </div>
     </fieldset>
-    <label class="field" style="max-width:8rem">
-      <span>Iterations</span>
-      <input type="number" name="iterations" value="1" min="1" max="8" />
-    </label>
+    <div class="form-row">
+      <label class="field" style="max-width:8rem">
+        <span>Iterations</span>
+        <input type="number" name="iterations" value="1" min="1" max="8" />
+      </label>
+      <label class="field" style="max-width:20rem">
+        <span>Brand kit — <a href="/brand-kits">the library</a></span>
+        <select name="brandkit">
+          {kits.results.map((k) => (
+            <option value={k.id}>{k.name} {k.team_kind === 'house' ? '· house' : ''}</option>
+          ))}
+        </select>
+      </label>
+    </div>
     <button class="btn" type="submit">Create project</button>
   </form>
 </Base>
@@ -104,6 +123,7 @@ if (Astro.request.method === 'POST') {
 <style>
   .new-project { max-width: 62rem; }
   fieldset { border: 0; }
+  .form-row { display: flex; gap: 1.5rem; flex-wrap: wrap; }
 
   .style-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0.5rem; }
   .style-grid > * { min-width: 0; }
