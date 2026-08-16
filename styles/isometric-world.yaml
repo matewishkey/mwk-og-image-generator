@@ -1,0 +1,18 @@
+name: Isometric World
+description: >-
+  A little diorama on a floating tile, drawn at exact 30-degree axonometric angles. The
+  product-explainer classic.
+look: >-
+  Isometric 3D illustration at a strict 30-degree axonometric projection, no perspective
+  convergence. Clean modelled geometry with flat-shaded faces and one soft global light
+  giving each plane a distinct tone. Limited saturated palette on a plain light background,
+  the whole scene sitting on a floating rounded platform tile with a soft drop shadow.
+  Tiny believable details reward a second look, but every element stays legible at
+  thumbnail size.
+subject: >-
+  A small isometric figure with simplified geometry and proportions, identifiable by
+  colour of clothing, hair shape and posture rather than facial detail.
+avoid: >-
+  camera perspective, photorealism, outlines, gradients within faces, cluttered edges
+tags: [isometric, 3d, diagram, tech]
+origin: hand

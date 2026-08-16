@@ -1,0 +1,17 @@
+name: Pixel Arcade
+description: >-
+  Chunky 16-bit pixel art with a limited palette. Instant nostalgia; great for dev and
+  gaming-adjacent posts.
+look: >-
+  16-bit era pixel art on a strict grid: chunky visible pixels, a limited palette of about
+  sixteen colours, and dithering used sparingly for gradients. Clean single-pixel outlines
+  where forms meet, flat colour fills inside, and a background built from simple parallax
+  bands. The image is crisp — every pixel deliberate, no anti-aliasing blur, no mixels of
+  different resolutions in one frame.
+subject: >-
+  A pixel-art character at readable sprite scale — hair, glasses and outfit colours carry
+  the likeness; the face is a few well-chosen pixels.
+avoid: >-
+  smooth gradients, anti-aliasing, 3D rendering, mixed pixel densities, photographic detail
+tags: [pixel, retro, game, 16-bit]
+origin: hand

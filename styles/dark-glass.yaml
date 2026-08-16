@@ -1,0 +1,17 @@
+name: Dark Glass
+description: >-
+  Moody frosted-glass layers over a deep dark ground — the fintech hero look. Premium,
+  night-mode native.
+look: >-
+  Dark glassmorphism: translucent frosted panes floating in layers over a near-black
+  ground, each pane blurring what sits behind it, with hairline light edges on their top
+  rims. One or two luminous accent glows — electric blue or violet — bleed softly through
+  the glass from behind. Depth comes from stacking and blur radius, not perspective.
+  Surfaces are immaculate; the mood is quiet, expensive, nocturnal.
+subject: >-
+  Rendered behind or between the panes as a softly lit figure, partially frosted where
+  glass overlaps, silhouette crisp where it does not.
+avoid: >-
+  light backgrounds, hard drop shadows, skeuomorphic textures, neon signage, clutter
+tags: [glass, dark, premium, fintech]
+origin: hand
