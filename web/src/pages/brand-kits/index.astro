@@ -29,7 +29,7 @@ let kits = await listKits();
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  if (String(form.get('action') ?? '') === 'duplicate') {
+  if (String(form.getAll('action').at(-1) ?? '') === 'duplicate') {
     const src = kits.results.find((k) => k.id === String(form.get('kit')));
     if (src) {
       const full = await env.DB.prepare(`SELECT * FROM brand_kit WHERE id = ?1`)

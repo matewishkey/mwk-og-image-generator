@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { applyBrand, loadBrand, type BrandConfig } from './brand.ts';
 import { compose } from './prompt.ts';
-import { pickSeconds, pickTier, priceOf, type ModelSpec } from './models.ts';
+import { billedRefMp, estimateRefMp, pickSeconds, pickTier, priceOf, type ModelSpec } from './models.ts';
 import { firstOutput, replicate, toDataUri } from './replicate.ts';
 import { brandVideo, posterFrame } from './video.ts';
 import type { Style } from './style.ts';
@@ -124,12 +124,7 @@ export function estimate(
   const perRound = opts.models.reduce(
     (sum, m) =>
       sum +
-      priceOf(
-        m,
-        pickTier(m, opts.tier),
-        m.refStyle === 'single' ? 0 : refMp,
-        pickSeconds(m, opts.seconds),
-      ),
+      priceOf(m, pickTier(m, opts.tier), estimateRefMp(m, refMp), pickSeconds(m, opts.seconds)),
     0,
   );
   return perRound * opts.styles.length * opts.ideas.length * opts.iterations;
@@ -259,13 +254,9 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
     opts.ideas.map((_, i) => toEntries(opts.ideaRefs?.[i] ?? [])),
   );
 
-  /** Bill what the model actually receives: none sees nothing, single sees the
-   *  first image only, the rest are capped at maxRefs — never the whole pile. */
-  const billedMp = (model: ModelSpec, entries: RefEntry[]): number => {
-    if (model.refStyle === 'none') return 0;
-    const seen = entries.slice(0, model.refStyle === 'single' ? 1 : model.maxRefs);
-    return seen.reduce((s, e) => s + e.mp, 0);
-  };
+  // Bill what the model actually receives — the one rule lives in models.ts.
+  const billedMp = (model: ModelSpec, entries: RefEntry[]): number =>
+    billedRefMp(model, entries.map((e) => e.mp));
 
   interface Job {
     cell: Cell;

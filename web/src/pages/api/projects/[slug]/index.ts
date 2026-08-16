@@ -1,7 +1,8 @@
 import type { APIRoute } from 'astro';
 import { ENV } from '../../../../lib/runtime';
-import { err, ok } from '../../../../lib/api';
+import { err, ok, readJson } from '../../../../lib/api';
 import { loadProject } from '../../../../lib/data';
+import { updateProject, type UpdateProjectPatch } from '../../../../lib/projects';
 
 export const GET: APIRoute = async (ctx) => {
   const team = ctx.locals.team;
@@ -36,4 +37,21 @@ export const GET: APIRoute = async (ctx) => {
     })),
     url: `/projects/${p.slug}/shots`,
   });
+};
+
+/**
+ * Partial settings update — same lib the settings page uses (updateProject),
+ * so the CLI's `studio set` and the browser can never drift.
+ */
+export const PATCH: APIRoute = async (ctx) => {
+  const team = ctx.locals.team;
+  if (!team || !ctx.locals.user) return err(403, 'no team');
+  const bundle = await loadProject(ENV, team.id, ctx.params.slug!);
+  if (!bundle) return err(404, 'no such project');
+
+  const body = await readJson<UpdateProjectPatch>(ctx.request);
+  if (!body) return err(400, 'send a JSON body (content-type: application/json)');
+  const r = await updateProject(ENV, team.id, bundle.project.id, body);
+  if ('error' in r) return err(r.status, r.error);
+  return ok({ ok: true, url: `/projects/${bundle.project.slug}/settings` });
 };

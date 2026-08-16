@@ -7,6 +7,7 @@ import { MODELS } from '../../../../../src/models.ts';
 import { EXTRA_PRESETS } from '../../../../../src/prompt.ts';
 import { proofThumbs } from '../../../lib/proofs';
 import { listStyles } from '../../../lib/styles';
+import { updateProject } from '../../../lib/projects';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -33,43 +34,38 @@ if (Astro.request.method === 'POST') {
   else if (!models.length) error = 'Pick at least one model.';
   else if (!styleIds.length) error = 'Pick at least one style.';
   else {
-    // The first checked style is the primary (previews, fallback); the whole
-    // set is what a run renders every shot in.
-    const projectId = bundle.project.id;
-    await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE project SET name=?1, description=?2, default_style_id=?3, models=?4,
-           iterations=?5, allow_text=?6, extra=?7, title=?8, kicker=?9, tagline=?10,
-           version=version+1, updated_at=?11
-         WHERE id=?12`,
-      ).bind(
-        name,
-        String(form.get('description') ?? '').trim(),
-        styleIds[0],
-        JSON.stringify(models),
-        iterations,
-        form.get('allow_text') ? 1 : 0,
-        String(form.get('extra') ?? '').trim() || null,
-        String(form.get('title') ?? '').trim() || null,
-        String(form.get('kicker') ?? '').trim() || null,
-        String(form.get('tagline') ?? '').trim() || null,
-        new Date().toISOString(),
-        projectId,
-      ),
-      env.DB.prepare(`DELETE FROM project_style WHERE project_id=?1`).bind(projectId),
-      ...styleIds.map((id, i) =>
-        env.DB.prepare(
-          `INSERT INTO project_style (project_id, style_id, position) VALUES (?1, ?2, ?3)`,
-        ).bind(projectId, id, i + 1),
-      ),
-    ]);
-    note = 'Saved. The next run uses these settings; past takes are untouched.';
-    bundle = (await loadProject(env, team.id, slug))!;
+    // One shared updater with the JSON API and the CLI (lib/projects.ts) —
+    // the first checked style is the primary; the set is what a run renders.
+    const r = await updateProject(env, team.id, bundle.project.id, {
+      name,
+      description: String(form.get('description') ?? ''),
+      styles: styleIds,
+      brandKit: String(form.get('brand_kit') ?? '') || undefined,
+      models,
+      iterations,
+      allowText: !!form.get('allow_text'),
+      extra: String(form.get('extra') ?? ''),
+      title: String(form.get('title') ?? ''),
+      kicker: String(form.get('kicker') ?? ''),
+      tagline: String(form.get('tagline') ?? ''),
+    });
+    if ('error' in r) error = r.error;
+    else {
+      note = 'Saved. The next run uses these settings; past takes are untouched.';
+      bundle = (await loadProject(env, team.id, slug))!;
+    }
   }
 }
 
 const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
 const chosenStyles = new Set(bundle.styles.map((s) => s.id));
+const kits = await env.DB.prepare(
+  `SELECT b.id, b.name, t.kind FROM brand_kit b JOIN team t ON t.id = b.team_id
+    WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
+    ORDER BY t.kind DESC, b.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; name: string; kind: string }>();
 const proofThumb = await proofThumbs(env, team.id);
 const sceneThumb = await proofThumbs(env, team.id, 'scene');
 ---
@@ -91,6 +87,14 @@ const sceneThumb = await proofThumbs(env, team.id, 'scene');
         <input type="text" name="name" value={bundle.project.name} required /></label>
       <label class="field"><span>Description</span>
         <input type="text" name="description" value={bundle.project.description} /></label>
+      <label class="field"><span>Brand kit — drives every card and preview (also switchable on the design page)</span>
+        <select name="brand_kit">
+          {kits.results.map((k) => (
+            <option value={k.id} selected={k.id === bundle.project.brand_kit_id}>
+              {k.name}{k.kind === 'house' ? ' (house)' : ''}
+            </option>
+          ))}
+        </select></label>
     </div>
     <fieldset class="field">
       <span>Styles — a run renders every shot in EVERY checked style (the first checked is the primary; a shot can still override)</span>

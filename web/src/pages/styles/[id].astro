@@ -27,7 +27,7 @@ let error = '';
 let note = '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const action = String(form.get('action') ?? '');
+  const action = String(form.getAll('action').at(-1) ?? '');
 
   if (action === 'edit' && editable) {
     const name = String(form.get('name') ?? '').trim();

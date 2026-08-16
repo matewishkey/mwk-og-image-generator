@@ -16,8 +16,13 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
 
   styles                       list styles (house + team)
   projects                     list the team's projects
-  create -n <name> -s <style>  new project; -m models (default zturbo,pimage), -i iterations, -d description, -k brand kit
+  create -n <name> -s <style>  new project; repeat -s for a style SET (first = primary); -m models
+                               (default zturbo,pimage), -i iterations, -d description, -k brand kit,
+                               --allow-text lifts the no-text frame rule (comics, screens)
   show <slug>                  project detail: settings + shots with ids
+  set <slug>                   change settings; --kit, --title/--kicker/--tagline, -s styles
+                               (repeat, first = primary), -m models, -i iterations, --allow-text,
+                               --name, --description, --extra. Only what you pass changes.
   add-shot <slug> -p <prompt>  add shot(s); repeat -p; --label names the first; --style overrides
   edit-shot <slug> <shot>      change a shot; -p prompt, --label label (shot = id, position or label)
   set-style <slug> <shot> [style]   per-shot style override; omit style to clear
@@ -25,6 +30,9 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
   delete-shot <slug> <shot>    soft-delete a shot
   refs                         the media library, with names
   name-ref <refId> <name>      name an image so we can talk about it
+  attach <slug> <refId>        attach a library image to every shot; --shot <id|position> scopes it
+  detach <slug> <refId>        remove that attachment; --shot scopes it the same way
+  ref-role <slug> <role...>    who the reference is in the scene (empty = clear)
   run <slug>                   start a full run (project settings pick models); --watch to follow
   watch <slug>                 follow take status until the run settles; --interval <s> (default 5)
   takes <slug>                 the contact sheet as a table; --all includes hidden + superseded
@@ -137,25 +145,28 @@ async function cmdCreate(argv: string[]): Promise<void> {
     args: argv,
     options: {
       name: { type: 'string', short: 'n' },
-      style: { type: 'string', short: 's' },
+      style: { type: 'string', short: 's', multiple: true },
       description: { type: 'string', short: 'd' },
       model: { type: 'string', short: 'm', multiple: true },
       iterations: { type: 'string', short: 'i' },
       kit: { type: 'string', short: 'k' },
+      'allow-text': { type: 'boolean' },
     },
   });
   if (!values.name) fail('-n <name> is required');
-  if (!values.style) fail('-s <style slug> is required (see: mwk-og studio styles)');
+  const styles = multi(values.style);
+  if (!styles.length) fail('-s <style slug> is required (see: mwk-og studio styles)');
   const models = multi(values.model);
   const created = await api<{ slug: string; url: string }>('/projects', {
     method: 'POST',
     body: {
       name: values.name,
       description: values.description,
-      style: values.style,
+      styles,
       brandKit: values.kit,
       models: models.length ? models : ['zturbo', 'pimage'],
       iterations: values.iterations ? Number(values.iterations) : 1,
+      allowText: values['allow-text'] ?? false,
     },
   });
   console.log(`✓ created ${created.slug}`);
@@ -342,6 +353,44 @@ export async function runStudio(argv: string[]): Promise<void> {
     case 'projects': await cmdProjects(); break;
     case 'create': await cmdCreate(rest); break;
     case 'show': await cmdShow(needSlug()); break;
+    case 'set': {
+      const slug = needSlug();
+      const { values } = parseArgs({
+        args: rest.slice(1),
+        options: {
+          kit: { type: 'string' },
+          title: { type: 'string' },
+          kicker: { type: 'string' },
+          tagline: { type: 'string' },
+          style: { type: 'string', short: 's', multiple: true },
+          model: { type: 'string', short: 'm', multiple: true },
+          iterations: { type: 'string', short: 'i' },
+          'allow-text': { type: 'boolean' },
+          name: { type: 'string' },
+          description: { type: 'string' },
+          extra: { type: 'string' },
+        },
+      });
+      const styles = multi(values.style);
+      const models = multi(values.model);
+      const patch: Record<string, unknown> = {};
+      if (values.kit !== undefined) patch.brandKit = values.kit;
+      if (values.title !== undefined) patch.title = values.title;
+      if (values.kicker !== undefined) patch.kicker = values.kicker;
+      if (values.tagline !== undefined) patch.tagline = values.tagline;
+      if (styles.length) patch.styles = styles;
+      if (models.length) patch.models = models;
+      if (values.iterations !== undefined) patch.iterations = Number(values.iterations);
+      if (values['allow-text'] !== undefined) patch.allowText = values['allow-text'];
+      if (values.name !== undefined) patch.name = values.name;
+      if (values.description !== undefined) patch.description = values.description;
+      if (values.extra !== undefined) patch.extra = values.extra;
+      if (!Object.keys(patch).length) fail('nothing to change — pass at least one flag');
+      await api(`/projects/${slug}`, { method: 'PATCH', body: patch });
+      console.log('✓ settings updated');
+      console.log(studioUrl(`/projects/${slug}/settings`));
+      break;
+    }
     case 'add-shot': await cmdAddShot(needSlug(), rest.slice(1)); break;
     case 'edit-shot': {
       const slug = needSlug();
@@ -384,6 +433,30 @@ export async function runStudio(argv: string[]): Promise<void> {
       break;
     }
     case 'refs': await cmdRefs(); break;
+    case 'attach':
+    case 'detach': {
+      const slug = needSlug();
+      const ref = rest[1];
+      if (!ref) fail(`usage: mwk-og studio ${command} <slug> <refId> [--shot <id|position>]`);
+      const { values } = parseArgs({ args: rest.slice(2), options: { shot: { type: 'string' } } });
+      await api(`/projects/${slug}/refs`, {
+        method: 'POST',
+        body: { action: command === 'attach' ? 'attach' : 'remove', ref, shot: values.shot },
+      });
+      const scope = values.shot ? `shot ${values.shot}` : 'every shot';
+      console.log(`✓ ${command === 'attach' ? 'attached to' : 'detached from'} ${scope}`);
+      console.log(studioUrl(`/projects/${slug}/shots`));
+      break;
+    }
+    case 'ref-role': {
+      const slug = needSlug();
+      await api(`/projects/${slug}/refs`, {
+        method: 'POST',
+        body: { action: 'role', refRole: rest.slice(1).join(' ') },
+      });
+      console.log('✓ ref-role set');
+      break;
+    }
     case 'name-ref': {
       const ref = rest[0];
       if (!ref) fail('usage: mwk-og studio name-ref <refId> <name>');

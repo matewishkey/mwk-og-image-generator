@@ -32,23 +32,28 @@ export const POST: APIRoute = async (ctx) => {
     name?: string;
     description?: string;
     style?: string;
+    styles?: string[];
     brandKit?: string;
     models?: string[];
     iterations?: number;
+    allowText?: boolean;
   }>(ctx.request);
   if (!body) return err(400, 'send a JSON body (content-type: application/json)');
-  if (!body.name || !body.style || !Array.isArray(body.models))
-    return err(400, 'name, style and models are required');
+  const primary = body.style ?? body.styles?.[0];
+  if (!body.name || !primary || !Array.isArray(body.models))
+    return err(400, 'name, style (or styles) and models are required');
 
   const result = await createProject(ENV, {
     teamId: team.id,
     userId: user.id,
     name: body.name,
     description: body.description,
-    style: body.style,
+    style: primary,
+    styles: body.styles,
     brandKit: body.brandKit,
     models: body.models,
     iterations: body.iterations,
+    allowText: body.allowText,
   });
   if ('error' in result) return err(result.status, result.error);
   return ok({ slug: result.slug, url: `/projects/${result.slug}/shots` }, 201);

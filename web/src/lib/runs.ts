@@ -4,7 +4,7 @@
  */
 
 import { compose } from '../../../src/prompt.ts';
-import { pickTier, priceOf, resolveModel } from '../../../src/models.ts';
+import { estimateRefMp, pickTier, priceOf, resolveModel } from '../../../src/models.ts';
 import { seamHeaders, type EngineRunRequest, type SeamIdea } from '../../../src/seam.ts';
 import type { Style } from '../../../src/style.ts';
 import { ulid } from './ulid';
@@ -68,8 +68,8 @@ export function toStyle(row: StyleRow): Style {
 export const usdToMicros = (usd: number): number => Math.round(usd * 1_000_000);
 export const microsToUsd = (m: number): string => `$${(m / 1_000_000).toFixed(4)}`;
 
-/** Estimate in micros for a grid of cells. Mirrors run.ts estimate(): single-ref
- *  models see one reference at most, so they are not charged for the whole pile. */
+/** Estimate in micros for a grid of cells — the ref-billing rule comes from
+ *  models.ts (estimateRefMp), the same source the CLI and engine use. */
 export function estimateMicros(
   models: string[],
   tier: string | null,
@@ -78,10 +78,7 @@ export function estimateMicros(
 ): number {
   const perRound = models.reduce((sum, alias) => {
     const spec = resolveModel(alias);
-    return (
-      sum +
-      priceOf(spec, pickTier(spec, tier ?? undefined), spec.refStyle === 'single' ? 0 : refMp, undefined)
-    );
+    return sum + priceOf(spec, pickTier(spec, tier ?? undefined), estimateRefMp(spec, refMp), undefined);
   }, 0);
   return usdToMicros(perRound * cells);
 }

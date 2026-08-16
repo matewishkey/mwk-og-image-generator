@@ -216,6 +216,43 @@ Load-bearing details:
   files — programmatic senders wait for it before submitting. The converter passes
   undecodable files through untouched BY DESIGN (server still sniffs).
 
+## Round 5: the design page is preview-first — the configurator is dead
+
+Mate's verdict: "almost nobody will use the configurator at all." The design page now
+SHOWS real cards instead of asking for settings; the knobs live only in the editor.
+
+- **`preview` table (0016) is a CACHE, not history** — one row per (project, kind
+  layout|style, ref), overwritten in place. `lib/previews.ts` `ensurePreview()` hashes the
+  exact engine payload (SHA-256); hash match = no render. The hash is IN the R2 key
+  (`…/previews/<kind>-<ref>-<hash12>.png`) so /img's immutable cache header stays honest;
+  the stale object is deleted on refresh. Composite renders are $0.00, engine `inline`.
+- **Per-style OG cards auto-render when a run settles** (events.ts run-finished, status
+  done → `refreshStylePreviews`, failures swallowed — never break the run callback). The
+  design page's inline script re-asks POST /api/…/previews per card (3 concurrent);
+  fresh answers are instant.
+- **Panels = pick ?? newest succeeded** (`resolvePanelTakes`, optional style scope) —
+  designs and previews work from DRAFTS; picking upgrades, never gates. NOTE the SQL
+  shape: SQLite refuses an outer-alias reference in the ORDER BY of an ON-clause
+  subquery ("no such column"), so pick-preference is a coalesce of two subqueries with
+  the correlation in WHERE. Cost a live 500 to learn; don't "simplify" it back.
+- **The gallery lists house layouts + NAMED team templates only** — anonymous `gen-*`
+  layouts stay out (their designs are in versions history); 70 near-identical cards was
+  the exact confusion the gallery exists to kill. Every card shows "N images".
+- **Design actions live in `lib/design-actions.ts`** (render-from-layout, all-formats,
+  generate, save-template, author, pack-link); design.astro's POST and
+  /api/…/designs are thin wrappers — change behaviour in the lib, never in a route.
+  The designs API also accepts `{ layoutId, formatIds?, themes?, effect? }` now.
+- **`updateProject` in lib/projects.ts is the ONE settings writer** — settings page,
+  PATCH /api/projects/[slug], and `studio set` all call it. The brand-kit selector
+  (settings + design page, changes project.brand_kit_id) rides it; kit change → new
+  payload hash → every preview re-renders lazily.
+- **Cost math consolidated** (the round-3 findings item): `billedRefMp` (exact, ledger)
+  and `estimateRefMp` (estimate-grade) in src/models.ts are the only ref-billing rule;
+  run.ts and web runs.ts both call them. The `form.get('action')` stragglers (team,
+  style detail, brand-kits list) are fixed — the pattern is extinct.
+- login_token timestamps are ISO-with-T; sqlite `datetime('now')` (space separator)
+  string-compares as expired. Mint tokens with real ISO strings.
+
 ## Multi-style, per-shot refs, character chaining (round 3 data model)
 
 - A project carries a style SET (`project_style`, migration 0010; `default_style_id`

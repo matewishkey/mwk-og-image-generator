@@ -95,6 +95,9 @@ check('re-roll buttons present', (await page.locator('button', { hasText: 'Re-ro
 await page.goto(`${BASE}/projects/brick-launch/design`);
 const designCards = await page.locator('.design-card').count();
 check(`design gallery renders (${designCards})`, designCards >= 1);
+// The versions grid sits below the preview gallery now; its thumbs are
+// loading="lazy", so scroll one into view before asking if it decoded.
+await page.locator('.design-card img').first().scrollIntoViewIfNeeded();
 const thumbOk = await page
   .waitForFunction(
     () => { const i = document.querySelector('.design-card img'); return i && i.complete && i.naturalWidth > 0; },

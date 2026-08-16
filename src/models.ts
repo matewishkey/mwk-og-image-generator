@@ -605,6 +605,30 @@ export function resolveModel(nameOrAlias: string): ModelSpec {
 }
 
 /**
+ * Reference megapixels a model is actually billed for: bill what the model
+ * RECEIVES — 'none' sees nothing, 'single' sees the first image only, the rest
+ * are capped at maxRefs, never the whole pile. The one implementation behind
+ * the CLI estimate, the engine's per-cell cost and the web estimate; a second
+ * copy of this rule is how billing disagreements start.
+ */
+export function billedRefMp(model: ModelSpec, refMps: number[]): number {
+  if (model.refStyle === 'none') return 0;
+  const seen = refMps.slice(0, model.refStyle === 'single' ? 1 : model.maxRefs);
+  return seen.reduce((s, m) => s + m, 0);
+}
+
+/**
+ * Estimate-grade variant when only the TOTAL ref megapixels are known (before
+ * per-cell resolution): 'single' approximates to 0 rather than overcharging a
+ * one-image model for the whole pile. Mirrors billedRefMp's intent, not its
+ * precision — the ledger always uses billedRefMp.
+ */
+export function estimateRefMp(model: ModelSpec, totalMp: number): number {
+  if (model.refStyle === 'none' || model.refStyle === 'single') return 0;
+  return totalMp;
+}
+
+/**
  * Price of one render.
  *
  * `refMp` is the total megapixels of the reference images attached to the cell. Most

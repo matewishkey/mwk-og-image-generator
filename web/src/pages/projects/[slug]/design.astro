@@ -3,12 +3,16 @@ import Base from '../../../layouts/Base.astro';
 import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
-import { createCollection, createDesign } from '../../../lib/design';
 import { layoutPanels, LayoutConfigSchema } from '../../../../../src/seam.ts';
-import { generateLayouts } from '../../../lib/generate';
-import { ulid } from '../../../lib/ulid';
-import { EFFECTS, isEffect } from '../../../../../src/effects.ts';
-import { slugify } from '../../../../../src/style.ts';
+import {
+  ensurePackLink,
+  generateAndRender,
+  renderAllFormats,
+  renderFromLayout,
+  saveTemplate,
+} from '../../../lib/design-actions';
+import { updateProject } from '../../../lib/projects';
+import { resolvePanelTakes } from '../../../lib/previews';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -18,47 +22,49 @@ if (!team) return new Response('No team', { status: 403 });
 const slug = Astro.params.slug!;
 const bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
+const project = bundle.project;
 
-// The inventory: this project's picks, in shot order, with their art.
-const picks = await env.DB.prepare(
-  `SELECT sh.id AS shot_id, sh.position, sh.label, t.id AS take_id, t.art_key, t.model_alias,
-          t.width, t.height
-     FROM shot sh JOIN take t ON t.id = sh.picked_take_id
-    WHERE sh.project_id = ?1 AND sh.deleted_at IS NULL AND t.art_key IS NOT NULL
-    ORDER BY sh.position`,
-)
-  .bind(bundle.project.id)
-  .all<{
-    shot_id: string; position: number; label: string | null; take_id: string; art_key: string;
-    model_alias: string; width: number | null; height: number | null;
-  }>();
+// The inventory: the best take per shot (the pick, else the newest draft).
+// Designs and previews work from drafts — picking upgrades them, never gates them.
+const panels = await resolvePanelTakes(env, project.id);
+const pickedCount = panels.length
+  ? (
+      await env.DB.prepare(
+        `SELECT count(*) AS n FROM shot WHERE project_id = ?1 AND deleted_at IS NULL AND picked_take_id IS NOT NULL`,
+      )
+        .bind(project.id)
+        .first<{ n: number }>()
+    )?.n ?? 0
+  : 0;
 
+// House layouts plus NAMED team templates. Anonymous gen-* layouts from past
+// generate runs stay out — their designs live in the versions history, and 70
+// near-identical cards is the confusion this gallery exists to kill.
 const layouts = await env.DB.prepare(
   `SELECT l.id, l.slug, l.name, l.config FROM layout l JOIN team t ON t.id = l.team_id
-    WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL ORDER BY l.name`,
+    WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL
+      AND (t.kind = 'house' OR l.slug NOT LIKE 'gen-%')
+    ORDER BY l.name`,
 )
   .bind(team.id)
   .all<{ id: string; slug: string; name: string; config: string }>();
 
 const formats = await env.DB.prepare(`SELECT id, slug, name, width, height FROM format ORDER BY rowid`).all<{
-  id: string;
-  slug: string;
-  name: string;
-  width: number;
-  height: number;
+  id: string; slug: string; name: string; width: number; height: number;
 }>();
+const ogFormat = formats.results.find((f) => f.slug === 'og') ?? formats.results[0]!;
+
+const kits = await env.DB.prepare(
+  `SELECT b.id, b.name, t.kind FROM brand_kit b JOIN team t ON t.id = b.team_id
+    WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
+    ORDER BY t.kind DESC, b.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; name: string; kind: string }>();
 
 const kitConfig = await env.DB.prepare(`SELECT config FROM brand_kit WHERE id = ?1`)
-  .bind(bundle.project.brand_kit_id)
+  .bind(project.brand_kit_id)
   .first<{ config: string }>();
-const bandFracOf = (config?: string): number | undefined => {
-  try {
-    const c = JSON.parse(config ?? '') as { band?: { height?: number }; canvas?: { height?: number } };
-    return c.band?.height && c.canvas?.height ? c.band.height / c.canvas.height : undefined;
-  } catch {
-    return undefined;
-  }
-};
 // The kit drives the emphasis colour and whether a dark render differs at all.
 const kitParsed = (() => {
   try {
@@ -73,243 +79,78 @@ const kitParsed = (() => {
 const accentHex = kitParsed.colors?.redDeep ?? '#f0524a';
 const kitHasDark = !!kitParsed.colorsDark && Object.keys(kitParsed.colorsDark).length > 0;
 
-const usable = layouts.results.filter((l) => {
+const usable = layouts.results.flatMap((l) => {
   const cfg = LayoutConfigSchema.safeParse(JSON.parse(l.config));
-  return cfg.success && layoutPanels(cfg.data) <= picks.results.length;
+  if (!cfg.success) return [];
+  const needs = layoutPanels(cfg.data);
+  return needs <= panels.length ? [{ ...l, needs }] : [];
 });
 
+const ctx = {
+  teamId: team.id,
+  userId: user.id,
+  project: {
+    id: project.id,
+    slug,
+    brand_kit_id: project.brand_kit_id,
+    title: project.title ?? null,
+    kicker: project.kicker ?? null,
+    tagline: project.tagline ?? null,
+  },
+};
+
 let error = '';
-let authorDraft = '';
 let genNote = Astro.url.searchParams.get('gen') ?? '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.getAll('action').at(-1) ?? 'render');
-
-  if (action === 'pack-link') {
-    // One unguessable token per project; creating it twice keeps the first.
-    const token = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
-    await env.DB.prepare(
-      `UPDATE project SET pack_token = coalesce(pack_token, ?1) WHERE id = ?2`,
-    )
-      .bind(token, bundle.project.id)
-      .run();
-    return Astro.redirect(`/projects/${slug}/design`);
-  } else if (action === 'all-formats') {
-    // Promote one design: same layout, same words, every format — a collection.
-    const src = await env.DB.prepare(
-      `SELECT layout_id, title, kicker, tagline FROM design WHERE id = ?1 AND team_id = ?2 AND project_id = ?3`,
-    )
-      .bind(String(form.get('design') ?? ''), team.id, bundle.project.id)
-      .first<{ layout_id: string; title: string | null; kicker: string | null; tagline: string | null }>();
-    if (src && picks.results.length > 0) {
-      try {
-        const collectionId = ulid();
-        await env.DB.prepare(
-          `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-        )
-          .bind(collectionId, team.id, bundle.project.id, null, user.id, new Date().toISOString())
-          .run();
-        await createCollection(env, {
-          teamId: team.id,
-          userId: user.id,
-          projectId: bundle.project.id,
-          layoutId: src.layout_id,
-          brandKitId: bundle.project.brand_kit_id,
-          title: src.title ?? undefined,
-          kicker: src.kicker ?? undefined,
-          tagline: src.tagline ?? undefined,
-          collectionId,
-          formats: formats.results,
-          panels: picks.results.map((pk) => ({
-            takeId: pk.take_id,
-            artKey: pk.art_key,
-            label: pk.label ?? undefined,
-          })),
-        });
-        return Astro.redirect(`/projects/${slug}/design`);
-      } catch (e) {
-        error = (e as Error).message;
-      }
-    }
-  } else if (action === 'generate' && picks.results.length > 0) {
-    try {
-      const formatId = String(form.get('format') ?? 'fmt_og');
-      const format = formats.results.find((f) => f.id === formatId) ?? formats.results[0]!;
-      const fmtRow = await env.DB.prepare(`SELECT name, width, height, safe_w, safe_h FROM format WHERE id = ?1`)
-        .bind(format.id)
-        .first<{ name: string; width: number; height: number; safe_w: number | null; safe_h: number | null }>();
-      const n = Math.max(2, Math.min(20, Number(form.get('n') ?? 8)));
-      const brief = String(form.get('brief') ?? '').trim();
-      const { layouts: generated, dropped } = await generateLayouts(
-        env,
-        {
-          panels: picks.results.map((pk) => ({
-            label: pk.label ?? `shot ${pk.position}`,
-            width: pk.width,
-            height: pk.height,
-          })),
-          format: fmtRow!,
-          palette: (JSON.parse(kitConfig?.config ?? '{}') as { colors?: Record<string, string> }).colors,
-          bandFrac: bandFracOf(kitConfig?.config),
-        },
-        brief,
-        n,
-      );
-      const nowIso = new Date().toISOString();
-      // Persist every generated layout first (fast D1 writes)...
-      const inserted: string[] = [];
-      for (const g of generated) {
-        const layoutId = ulid();
-        await env.DB.prepare(
-          `INSERT INTO layout (id, team_id, slug, name, config, brief, generated_by, created_at, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'openai/gpt-5.6-terra', ?7, ?7)`,
-        )
-          .bind(layoutId, team.id, `gen-${layoutId.slice(-8).toLowerCase()}`, g.name,
-                JSON.stringify(g.config), brief || null, nowIso)
-          .run();
-        inserted.push(layoutId);
-      }
-      // ...then render them ~4 wide instead of one engine round-trip at a time.
-      let rendered = 0;
-      let next = 0;
-      await Promise.all(
-        Array.from({ length: Math.min(4, inserted.length) }, async () => {
-          while (next < inserted.length) {
-            const layoutId = inserted[next++]!;
-            try {
-              await createDesign(env, {
-                teamId: team.id,
-                userId: user.id,
-                projectId: bundle.project.id,
-                layoutId,
-                formatId: format.id,
-                brandKitId: bundle.project.brand_kit_id,
-                title: bundle.project.title ?? undefined,
-                kicker: bundle.project.kicker ?? undefined,
-                tagline: bundle.project.tagline ?? undefined,
-                panels: picks.results.map((pk) => ({
-                  takeId: pk.take_id,
-                  artKey: pk.art_key,
-                  label: pk.label ?? undefined,
-                })),
-              });
-              rendered++;
-            } catch {
-              /* a config the renderer rejects is dropped, not shown */
-            }
-          }
-        }),
-      );
-      return Astro.redirect(`/projects/${slug}/design?gen=${rendered}+rendered,+${dropped + (generated.length - rendered)}+dropped`);
-    } catch (e) {
-      error = (e as Error).message;
-    }
-  } else if (action === 'save-template') {
-    // Promote a generated layout: give it a real name so it reads like a template
-    // in the picker. House layouts are not renameable — team_id in the WHERE.
-    const src = await env.DB.prepare(
-      `SELECT layout_id FROM design WHERE id = ?1 AND team_id = ?2 AND project_id = ?3`,
-    )
-      .bind(String(form.get('design') ?? ''), team.id, bundle.project.id)
-      .first<{ layout_id: string }>();
-    const name = String(form.get('name') ?? '').trim();
-    if (src && name) {
-      const r = await env.DB.prepare(
-        `UPDATE layout SET name = ?1, slug = ?2, updated_at = ?3 WHERE id = ?4 AND team_id = ?5`,
-      )
-        .bind(name, slugify(name) || `tpl-${src.layout_id.slice(-8).toLowerCase()}`,
-              new Date().toISOString(), src.layout_id, team.id)
-        .run();
-      if (r.meta.changes === 0) error = 'Only generated (team) layouts can be saved as templates.';
-      else return Astro.redirect(`/projects/${slug}/design?gen=template+saved`);
-    } else error = 'A template needs a name.';
-  } else if (action === 'author') {
-    // Hand-authored template: raw JSON -> validate -> new layout row -> render.
-    // Every iteration is a NEW layout (generated_by 'hand') — append-only history.
-    authorDraft = String(form.get('config') ?? '');
-    const name = String(form.get('name') ?? '').trim() || 'Hand-authored';
-    try {
-      const parsed = LayoutConfigSchema.safeParse(JSON.parse(authorDraft));
-      if (!parsed.success)
-        throw new Error(parsed.error.issues.map((i) => `${i.path.join('.') || 'config'}: ${i.message}`).join('; '));
-      const needs = layoutPanels(parsed.data);
-      if (needs > picks.results.length)
-        throw new Error(`this template needs ${needs} picks; the project has ${picks.results.length}`);
-      const layoutId = ulid();
-      await env.DB.prepare(
-        `INSERT INTO layout (id, team_id, slug, name, config, generated_by, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'hand', ?6, ?6)`,
-      )
-        .bind(layoutId, team.id, `${slugify(name) || 'tpl'}-${layoutId.slice(-6).toLowerCase()}`,
-              name, JSON.stringify(parsed.data), new Date().toISOString())
-        .run();
-      await createDesign(env, {
-        teamId: team.id,
-        userId: user.id,
-        projectId: bundle.project.id,
-        layoutId,
-        formatId: String(form.get('format') ?? 'fmt_og'),
-        brandKitId: bundle.project.brand_kit_id,
-        title: bundle.project.title ?? undefined,
-        kicker: bundle.project.kicker ?? undefined,
-        tagline: bundle.project.tagline ?? undefined,
-        panels: picks.results.map((pk) => ({
-          takeId: pk.take_id,
-          artKey: pk.art_key,
-          label: pk.label ?? undefined,
-        })),
-      });
-      return Astro.redirect(`/projects/${slug}/design`);
-    } catch (e) {
-      error = `Template: ${(e as Error).message}`;
-    }
-  } else
   try {
-    const chosen = form.getAll('formats').map(String);
-    const chosenFormats = formats.results.filter((f) => chosen.includes(f.id));
-    if (!chosenFormats.length) throw new Error('Pick at least one format.');
-    const themes = (form.getAll('theme').map(String).filter((t) => t === 'light' || t === 'dark') as
-      ('light' | 'dark')[]);
-    if (!themes.length) themes.push('light');
-    const effectChoice = String(form.get('effect') ?? '');
-    const text = {
-      title: String(form.get('title') ?? '').trim() || undefined,
-      kicker: String(form.get('kicker') ?? '').trim() || undefined,
-      tagline: String(form.get('tagline') ?? '').trim() || undefined,
-    };
-    const base = {
-      teamId: team.id,
-      userId: user.id,
-      projectId: bundle.project.id,
-      layoutId: String(form.get('layout') ?? ''),
-      brandKitId: bundle.project.brand_kit_id,
-      effect: isEffect(effectChoice) ? effectChoice : undefined,
-      ...text,
-      panels: picks.results.map((p) => ({
-        takeId: p.take_id,
-        artKey: p.art_key,
-        label: p.label ?? undefined,
-      })),
-    };
-    for (const theme of themes) {
-      if (chosenFormats.length > 1) {
-        // Several formats at once: a Collection, still one engine call per theme.
-        const collectionId = ulid();
-        await env.DB.prepare(
-          `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-        )
-          .bind(collectionId, team.id, bundle.project.id,
-                usable.find((l) => l.id === base.layoutId)?.name ?? null,
-                user.id, new Date().toISOString())
-          .run();
-        await createCollection(env, { ...base, theme, collectionId, formats: chosenFormats });
-      } else {
-        await createDesign(env, { ...base, theme, formatId: chosenFormats[0]!.id });
-      }
+    if (action === 'pack-link') {
+      await ensurePackLink(env, project.id);
+      return Astro.redirect(`/projects/${slug}/design`);
+    } else if (action === 'set-kit') {
+      const r = await updateProject(env, team.id, project.id, {
+        brandKit: String(form.get('kit') ?? ''),
+      });
+      if ('error' in r) throw new Error(r.error);
+      return Astro.redirect(`/projects/${slug}/design`);
+    } else if (action === 'all-formats') {
+      await renderAllFormats(env, ctx, String(form.get('design') ?? ''), formats.results);
+      return Astro.redirect(`/projects/${slug}/design`);
+    } else if (action === 'generate') {
+      const formatId = String(form.get('format') ?? ogFormat.id);
+      const fmtRow = await env.DB.prepare(
+        `SELECT id, slug, name, width, height, safe_w, safe_h FROM format WHERE id = ?1`,
+      )
+        .bind(formatId)
+        .first<{ id: string; slug: string; name: string; width: number; height: number;
+                 safe_w: number | null; safe_h: number | null }>();
+      const { rendered, dropped } = await generateAndRender(env, ctx, {
+        format: fmtRow ?? { ...ogFormat, safe_w: null, safe_h: null },
+        brief: String(form.get('brief') ?? '').trim(),
+        n: Math.max(2, Math.min(20, Number(form.get('n') ?? 8))),
+        kitConfig: kitConfig?.config,
+      });
+      return Astro.redirect(`/projects/${slug}/design?gen=${rendered}+rendered,+${dropped}+dropped`);
+    } else if (action === 'save-template') {
+      await saveTemplate(env, ctx, String(form.get('design') ?? ''), String(form.get('name') ?? ''));
+      return Astro.redirect(`/projects/${slug}/design?gen=template+saved`);
+    } else {
+      // 'render' — a gallery card's Use button; the words travel in the same form.
+      const layoutId = String(form.get('layout') ?? '');
+      if (!layoutId) throw new Error('Click Use on one of the layout cards to render it.');
+      const themes = form.getAll('theme').map(String).filter((t) => t === 'light' || t === 'dark') as
+        ('light' | 'dark')[];
+      const leadId = await renderFromLayout(env, ctx, {
+        layoutId,
+        formats: [ogFormat],
+        themes: themes.length ? themes : ['light'],
+        title: String(form.get('title') ?? ''),
+        kicker: String(form.get('kicker') ?? ''),
+        tagline: String(form.get('tagline') ?? ''),
+      });
+      return Astro.redirect(`/projects/${slug}/design${leadId ? `?lead=${leadId}` : ''}`);
     }
-    return Astro.redirect(`/projects/${slug}/design`);
   } catch (e) {
     error = (e as Error).message;
   }
@@ -323,25 +164,12 @@ const designs = await env.DB.prepare(
     WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
     ORDER BY d.created_at DESC`,
 )
-  .bind(bundle.project.id)
+  .bind(project.id)
   .all<{
-    id: string;
-    collection_id: string | null;
-    title: string | null;
-    tagline: string | null;
-    kicker: string | null;
-    r2_key: string;
-    thumb_key: string;
-    width: number;
-    height: number;
-    created_at: string;
-    effect: string | null;
-    theme: string;
-    layout_name: string;
-    layout_team_id: string;
-    layout_id: string;
-    format_name: string;
-    format_slug: string;
+    id: string; collection_id: string | null; title: string | null; tagline: string | null;
+    kicker: string | null; r2_key: string; thumb_key: string; width: number; height: number;
+    created_at: string; effect: string | null; theme: string; layout_name: string;
+    layout_team_id: string; layout_id: string; format_name: string; format_slug: string;
   }>();
 
 type DesignRow = (typeof designs.results)[number];
@@ -362,26 +190,35 @@ const leadPanels = lead
         .all<{ position: number; label: string | null; art_key: string | null }>()
     ).results.filter((p) => p.art_key)
   : [];
+
+// Cached previews (possibly stale — the page paints them instantly, then the
+// inline script asks the API to refresh each one; a hash match costs nothing).
+const previewRows = await env.DB.prepare(
+  `SELECT kind, ref_id, r2_key FROM preview WHERE project_id = ?1`,
+)
+  .bind(project.id)
+  .all<{ kind: string; ref_id: string; r2_key: string }>();
+const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id}`, p.r2_key]));
 ---
 
-<Base title={`${bundle.project.name} · design`} nav="projects" project={{ slug, name: bundle.project.name, active: 'design' }}>
+<Base title={`${project.name} · design`} nav="projects" project={{ slug, name: project.name, active: 'design' }}>
   <div class="page-head">
-    <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
+    <p class="kicker"><span class="g">/</span>{project.name}</p>
     <h1>Design</h1>
     <p class="sub">
-      Picks + a layout + a format = a finished card, rendered for $0.00. Changing the
-      words or the layout just makes another one — iterate freely.
+      Every card below is rendered with this project's real pictures, for $0.00 — see it,
+      then click the one you want. Fine control lives in
+      <a href={`/projects/${slug}/design/editor`}>the editor</a>.
     </p>
   </div>
 
-
   <p class="pack-bar">
     {
-      (bundle.project as unknown as { pack_token: string | null }).pack_token ? (
+      (project as unknown as { pack_token: string | null }).pack_token ? (
         <>
           <span class="kicker"><span class="g">/</span>Pack</span>
-          <a class="mono" href={`/pack/${(bundle.project as unknown as { pack_token: string }).pack_token}`} target="_blank">
-            {`${env.PUBLIC_ORIGIN}/pack/${(bundle.project as unknown as { pack_token: string }).pack_token.slice(0, 10)}…`}
+          <a class="mono" href={`/pack/${(project as unknown as { pack_token: string }).pack_token}`} target="_blank">
+            {`${env.PUBLIC_ORIGIN}/pack/${(project as unknown as { pack_token: string }).pack_token.slice(0, 10)}…`}
           </a>
           <span class="faint">— the whole concept behind one link, for the social generator. Add .json for machines.</span>
         </>
@@ -398,204 +235,236 @@ const leadPanels = lead
   {genNote && <p class="flash">{genNote} — every render was $0.00. Keep the good ones, ignore the rest.</p>}
 
   {
-    lead && (
-      <section class="lead">
-        <figure class="lead-card">
-          <a href={`/img/${lead.r2_key}`} target="_blank">
-            <img src={`/img/${lead.r2_key}`} alt={lead.format_name} />
-          </a>
-          <figcaption>
-            <b>{lead.layout_name}</b>
-            <span class="mono faint">
-              {lead.format_slug} · {lead.width}×{lead.height}{lead.effect ? ` · ${lead.effect}` : ''}
-              {lead.theme === 'dark' ? ' · dark' : ''}
-            </span>
-            <span class="lead-actions">
-              <form method="post">
-                <input type="hidden" name="action" value="all-formats" />
-                <input type="hidden" name="design" value={lead.id} />
-                <button class="btn small" type="submit" data-running="Rendering…"><Icon name="run" />All {formats.results.length} formats · $0.00</button>
-              </form>
-              <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}><Icon name="watch" />Preview</a>
-              <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${lead.layout_id}&design=${lead.id}`}><Icon name="edit" />Open in editor</a>
-              <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}><Icon name="download" />Download</a>
-              {leadPanels.map((p) => (
-                <a class="btn small ghost" href={`/img/${p.art_key}`} download={`${slug}-${p.label ?? `panel-${p.position}`}-raw.png`}>
-                  <Icon name="download" />Raw {leadPanels.length > 1 ? p.label ?? p.position : 'picture'}
-                </a>
-              ))}
-            </span>
-            {lead.layout_team_id === team.id && (
-              <form method="post" class="save-template">
-                <input type="hidden" name="action" value="save-template" />
-                <input type="hidden" name="design" value={lead.id} />
-                <input type="text" name="name" placeholder="save this layout as a template…" />
-                <button class="btn small ghost" type="submit"><Icon name="template" />Save</button>
-              </form>
-            )}
-          </figcaption>
-        </figure>
-      </section>
-    )
-  }
-
-  {
-    picks.results.length === 0 ? (
+    panels.length === 0 ? (
       <p class="sub">
-        No picks yet. Go to <a href={`/projects/${slug}/shots`}>Shots & takes</a> and pick the take that
-        should represent each shot.
+        No takes yet. Go to <a href={`/projects/${slug}/shots`}>Shots &amp; takes</a> and run the
+        shots — the previews here appear as soon as drafts exist.
       </p>
     ) : (
-      <form method="post" class="design-form card">
-        <p class="inventory mono">
-          Inventory: {picks.results.length} pick{picks.results.length === 1 ? '' : 's'} —{' '}
-          {picks.results.map((p) => p.label ?? `shot ${p.position}`).join(' · ')}
-        </p>
-        <div class="form-grid">
-          <label class="field">
-            <span>Layout</span>
-            <select name="layout" required>
-              {usable.map((l) => (
-                <option value={l.id}>{l.name}</option>
-              ))}
-            </select>
-          </label>
-          <label class="field">
-            <span>Finish — a deterministic pass over the final card, never an AI re-render</span>
-            <select name="effect">
-              <option value="" selected>None — the card as composited</option>
-              {EFFECTS.map((e) => (
-                <option value={e.slug}>{e.label} — {e.blurb}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <fieldset class="field">
-          <span>Formats — the OG card first; tick more when you need them <button type="button" class="linkish select-all" id="fmt-all">(select all)</button></span>
-          <div class="fmt-grid">
-            {formats.results.map((f) => (
-              <label class="fmt-pick">
-                <input type="checkbox" name="formats" value={f.id} checked={f.slug === 'og'} />
-                <span>{f.name}</span>
-                <span class="mono faint">{f.width}×{f.height}</span>
-              </label>
+      <>
+        {
+          bundle.styles.length > 1 && (
+            <section class="pv-section">
+              <p class="kicker"><span class="g">/</span>The styles, finished — one OG card each, refreshed after every run</p>
+              <div class="pv-grid pv-styles">
+                {bundle.styles.map((s) => (
+                  <figure class="pv-card">
+                    <img
+                      data-pv-kind="style"
+                      data-pv-ref={s.id}
+                      src={previewKey.has(`style:${s.id}`) ? `/img/${previewKey.get(`style:${s.id}`)}` : undefined}
+                      alt={`${s.name} preview`}
+                      loading="lazy"
+                    />
+                    <figcaption>
+                      <b>{s.name}</b>
+                      {s.id === project.default_style_id && <em class="chip">primary</em>}
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+            </section>
+          )
+        }
+
+        {
+          lead && (
+            <section class="lead">
+              <figure class="lead-card">
+                <a href={`/img/${lead.r2_key}`} target="_blank">
+                  <img src={`/img/${lead.r2_key}`} alt={lead.format_name} />
+                </a>
+                <figcaption>
+                  <b>{lead.layout_name}</b>
+                  <span class="mono faint">
+                    {lead.format_slug} · {lead.width}×{lead.height}{lead.effect ? ` · ${lead.effect}` : ''}
+                    {lead.theme === 'dark' ? ' · dark' : ''}
+                  </span>
+                  <span class="lead-actions">
+                    <form method="post">
+                      <input type="hidden" name="action" value="all-formats" />
+                      <input type="hidden" name="design" value={lead.id} />
+                      <button class="btn small" type="submit" data-running="Rendering…"><Icon name="run" />All {formats.results.length} formats · $0.00</button>
+                    </form>
+                    <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}><Icon name="watch" />Preview</a>
+                    <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${lead.layout_id}&design=${lead.id}`}><Icon name="edit" />Open in editor</a>
+                    <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}><Icon name="download" />Download</a>
+                    {leadPanels.map((p) => (
+                      <a class="btn small ghost" href={`/img/${p.art_key}`} download={`${slug}-${p.label ?? `panel-${p.position}`}-raw.png`}>
+                        <Icon name="download" />Raw {leadPanels.length > 1 ? p.label ?? p.position : 'picture'}
+                      </a>
+                    ))}
+                  </span>
+                  {lead.layout_team_id === team.id && (
+                    <form method="post" class="save-template">
+                      <input type="hidden" name="action" value="save-template" />
+                      <input type="hidden" name="design" value={lead.id} />
+                      <input type="text" name="name" placeholder="save this layout as a template…" />
+                      <button class="btn small ghost" type="submit"><Icon name="template" />Save</button>
+                    </form>
+                  )}
+                </figcaption>
+              </figure>
+            </section>
+          )
+        }
+
+        <form method="post" class="design-form card">
+          <p class="inventory mono">
+            Working with {panels.length} image{panels.length === 1 ? '' : 's'}
+            ({pickedCount} picked{pickedCount < panels.length ? ', the rest are the newest drafts — picking on the shots page upgrades them' : ''})
+            — {panels.map((p) => p.label ?? `shot ${p.position}`).join(' · ')}
+          </p>
+          <div class="opts-row">
+            <label class="field">
+              <span>Brand kit</span>
+              <select id="kit-select" name="kit">
+                {kits.results.map((k) => (
+                  <option value={k.id} selected={k.id === project.brand_kit_id}>
+                    {k.name}{k.kind === 'house' ? ' (house)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label class="field">
+              <span>Title — *word* renders in the kit's accent <i class="accent-swatch" style={`background:${accentHex}`} title={accentHex}></i></span>
+              <input type="text" name="title" value={project.title ?? ''} /></label>
+            <label class="field"><span>Kicker (label above) — usually not with a tagline</span>
+              <input type="text" name="kicker" value={project.kicker ?? ''} /></label>
+            <label class="field"><span>Tagline (sentence below)</span>
+              <input type="text" name="tagline" value={project.tagline ?? ''} /></label>
+            <fieldset class="field theme-field">
+              <span>Theme{kitHasDark ? '' : ' — this kit has no dark palette yet; dark renders identical'}</span>
+              <label class="inline-check"><input type="checkbox" name="theme" value="light" checked /> light</label>
+              <label class="inline-check"><input type="checkbox" name="theme" value="dark" /> dark</label>
+            </fieldset>
+          </div>
+          <script is:inline>
+            // Changing the kit re-renders every preview — a page round-trip, kept honest.
+            document.getElementById('kit-select')?.addEventListener('change', (e) => {
+              const f = e.target.form;
+              const a = document.createElement('input');
+              a.type = 'hidden'; a.name = 'action'; a.value = 'set-kit';
+              f.appendChild(a);
+              f.requestSubmit();
+            });
+          </script>
+
+          <p class="kicker gallery-kicker"><span class="g">/</span>The layouts, with your pictures — click Use to make it a real card (OG format; more from the lead)</p>
+          <div class="pv-grid pv-layouts">
+            {usable.map((l) => (
+              <figure class="pv-card">
+                <img
+                  data-pv-kind="layout"
+                  data-pv-ref={l.id}
+                  src={previewKey.has(`layout:${l.id}`) ? `/img/${previewKey.get(`layout:${l.id}`)}` : undefined}
+                  alt={`${l.name} preview`}
+                  loading="lazy"
+                />
+                <figcaption>
+                  <b>{l.name}</b>
+                  <span class="mono faint">{l.needs} image{l.needs === 1 ? '' : 's'}</span>
+                  <button class="btn small" type="submit" name="layout" value={l.id} data-running="Rendering…">
+                    <Icon name="run" />Use · $0.00
+                  </button>
+                </figcaption>
+              </figure>
             ))}
           </div>
-        </fieldset>
-        <script is:inline>
-          document.getElementById('fmt-all')?.addEventListener('click', () => {
-            document.querySelectorAll('.fmt-grid input[type=checkbox]').forEach((c) => (c.checked = true));
-          });
+          {usable.length === 0 && (
+            <p class="sub">No layout fits yet — every layout needs at least one image per panel.</p>
+          )}
+        </form>
+
+        <form method="post" class="design-form card generate-form">
+          <input type="hidden" name="action" value="generate" />
+          <p class="inventory mono">Or let the model propose arrangements — it writes configs, the renderer draws them.</p>
+          <div class="form-grid">
+            <label class="field">
+              <span>Direction (optional) — <button type="button" class="linkish" id="brief-minimal">minimal</button> fills a quiet brief</span>
+              <input type="text" name="brief" id="brief-input" placeholder="e.g. make the launch the hero, keep it calm" />
+            </label>
+            <label class="field" style="max-width:10rem">
+              <span>How many</span>
+              <select name="n">
+                <option value="4">4</option>
+                <option value="8" selected>8</option>
+                <option value="12">12</option>
+                <option value="20">20</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Format</span>
+              <select name="format">
+                {formats.results.map((f) => (
+                  <option value={f.id}>{f.name} · {f.width}×{f.height}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <button class="btn ghost" type="submit" data-running="Designing — twenty seconds or so…"><Icon name="template" />Generate layouts · under a cent</button>
+          <script is:inline>
+            document.getElementById('brief-minimal')?.addEventListener('click', () => {
+              const b = document.getElementById('brief-input');
+              b.value = 'minimal and quiet: one image or two at most, generous empty space, no shapes, at most one small text layer';
+              b.focus();
+            });
+          </script>
+        </form>
+
+        {
+          versions.length > 0 && (
+            <section class="versions">
+              <p class="kicker"><span class="g">/</span>Versions — click one to lead</p>
+              <div class="designs-grid">
+                {versions.map((d) => (
+                  <figure class="design-card">
+                    <a href={`/projects/${slug}/design?lead=${d.id}`}>
+                      <img src={`/img/${d.thumb_key}`} alt={d.format_name} loading="lazy" />
+                    </a>
+                    <figcaption>
+                      <span>{d.layout_name}</span>
+                      <span class="mono faint">{d.format_slug}{d.theme === 'dark' ? ' · dark' : ''}</span>
+                      <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`} title="Download"><Icon name="download" />PNG</a>
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+            </section>
+          )
+        }
+
+        <script is:inline define:vars={{ slug }}>
+          // Refresh every preview card: fresh ones answer instantly from the hash
+          // check; stale/missing ones render once, then the image swaps in.
+          (() => {
+            const imgs = [...document.querySelectorAll('img[data-pv-kind]')];
+            const queue = [...imgs];
+            imgs.forEach((i) => { if (!i.getAttribute('src')) i.closest('.pv-card')?.classList.add('pv-loading'); });
+            let active = 0;
+            const MAX = 3;
+            const pump = () => {
+              while (active < MAX && queue.length) {
+                const img = queue.shift();
+                active++;
+                fetch(`/api/projects/${slug}/previews`, {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ kind: img.dataset.pvKind, ref: img.dataset.pvRef }),
+                })
+                  .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+                  .then((d) => {
+                    if (img.getAttribute('src') !== d.url) img.src = d.url;
+                    img.closest('.pv-card')?.classList.remove('pv-loading', 'pv-failed');
+                  })
+                  .catch(() => img.closest('.pv-card')?.classList.add('pv-failed'))
+                  .finally(() => { active--; pump(); });
+              }
+            };
+            pump();
+          })();
         </script>
-        <fieldset class="field">
-          <span>Theme — dark uses the kit's dark palette{kitHasDark ? '' : ' (this kit has none yet — dark renders identical; add one in the kit editor)'}</span>
-          <label class="inline-check"><input type="checkbox" name="theme" value="light" checked /> light</label>
-          <label class="inline-check"><input type="checkbox" name="theme" value="dark" /> dark</label>
-        </fieldset>
-        <div class="form-grid">
-          <label class="field">
-            <span>Title — *word* renders in the kit's accent <i class="accent-swatch" style={`background:${accentHex}`} title={accentHex}></i></span>
-            <input type="text" name="title" value={bundle.project.title ?? ''} /></label>
-          <label class="field"><span>Kicker (label above) — usually not with a tagline</span>
-            <input type="text" name="kicker" value={bundle.project.kicker ?? ''} /></label>
-          <label class="field"><span>Tagline (sentence below)</span>
-            <input type="text" name="tagline" value={bundle.project.tagline ?? ''} /></label>
-        </div>
-        <button class="btn" type="submit" data-running="Rendering…"><Icon name="run" />Render · $0.00</button>
-      </form>
-    )
-  }
-
-  {
-    picks.results.length > 0 && (
-      <form method="post" class="design-form card generate-form">
-        <input type="hidden" name="action" value="generate" />
-        <p class="inventory mono">Or let the model propose arrangements — it writes configs, the renderer draws them.</p>
-        <div class="form-grid">
-          <label class="field">
-            <span>Direction (optional) — <button type="button" class="linkish" id="brief-minimal">minimal</button> fills a quiet brief</span>
-            <input type="text" name="brief" id="brief-input" placeholder="e.g. make the launch the hero, keep it calm" />
-          </label>
-          <label class="field" style="max-width:10rem">
-            <span>How many</span>
-            <select name="n">
-              <option value="4">4</option>
-              <option value="8" selected>8</option>
-              <option value="12">12</option>
-              <option value="20">20</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Format</span>
-            <select name="format">
-              {formats.results.map((f) => (
-                <option value={f.id}>{f.name} · {f.width}×{f.height}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <button class="btn ghost" type="submit" data-running="Designing — twenty seconds or so…"><Icon name="template" />Generate layouts · under a cent</button>
-        <script is:inline>
-          document.getElementById('brief-minimal')?.addEventListener('click', () => {
-            const b = document.getElementById('brief-input');
-            b.value = 'minimal and quiet: one image or two at most, generous empty space, no shapes, at most one small text layer';
-            b.focus();
-          });
-        </script>
-      </form>
-    )
-  }
-
-  {
-    picks.results.length > 0 && (
-      <form method="post" class="design-form card author-form">
-        <input type="hidden" name="action" value="author" />
-        <p class="inventory mono">
-          Or author a template as raw JSON — full control: cells, texts, shapes, tokens.
-          The <a href="/glossary">glossary</a> names the vocabulary; colors are always brand
-          tokens (paper, ink, red, redDeep — the accent…), never hex.
-          Prefer knobs and a live preview? <a href={`/projects/${slug}/design/editor`}>Open the editor</a>.
-        </p>
-        <label class="field"><span>Template config (JSON)</span>
-          <textarea name="config" class="mono author-json" required
-            placeholder={'{"cells":[{"x":0,"y":0,"w":1,"h":1}],"lockup":"bottom"}'}
-          >{authorDraft}</textarea></label>
-        <div class="form-grid">
-          <label class="field"><span>Name</span>
-            <input type="text" name="name" placeholder="e.g. Off-centre hero" /></label>
-          <label class="field">
-            <span>Format</span>
-            <select name="format">
-              {formats.results.map((f) => (
-                <option value={f.id}>{f.name} · {f.width}×{f.height}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <button class="btn ghost" type="submit" data-running="Rendering…"><Icon name="edit" />Validate &amp; render · $0.00</button>
-      </form>
-    )
-  }
-
-  {
-    versions.length > 0 && (
-      <section class="versions">
-        <p class="kicker"><span class="g">/</span>Versions — click one to lead</p>
-        <div class="designs-grid">
-          {versions.map((d) => (
-            <figure class="design-card">
-              <a href={`/projects/${slug}/design?lead=${d.id}`}>
-                <img src={`/img/${d.thumb_key}`} alt={d.format_name} loading="lazy" />
-              </a>
-              <figcaption>
-                <span>{d.layout_name}</span>
-                <span class="mono faint">{d.format_slug}{d.theme === 'dark' ? ' · dark' : ''}</span>
-                <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`} title="Download"><Icon name="download" />PNG</a>
-              </figcaption>
-            </figure>
-          ))}
-        </div>
-      </section>
+      </>
     )
   }
 </Base>
@@ -611,25 +480,34 @@ const leadPanels = lead
   .lead-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; max-width: 64rem; }
   .lead-card img { display: block; width: 100%; height: auto; }
   .lead-card figcaption { display: flex; align-items: center; gap: 0.9rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
-  .lead-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
+  .lead-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
   .save-template { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.3rem; }
   .save-template input[type=text] { font-size: 0.82rem; padding: 0.35rem 0.55rem; max-width: 22rem; }
-  .fmt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.4rem; }
-  .fmt-grid > * { min-width: 0; }
-  .fmt-pick {
-    display: flex; align-items: center; gap: 0.5rem;
-    background: var(--surface-2); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: 0.4rem 0.6rem; cursor: pointer; font-size: 0.85rem;
-  }
-  .fmt-pick:has(input:checked) { border-color: var(--accent); }
-  .select-all { font-size: 0.68rem; letter-spacing: 0; text-transform: none; }
-  .author-json { min-height: 8rem; font-size: 0.82rem; }
   fieldset { border: 0; }
   .inline-check { display: inline-flex; gap: 0.4rem; align-items: center; margin-right: 1.2rem; color: var(--mute); font-size: 0.9rem; }
   .accent-swatch {
     display: inline-block; width: 0.85em; height: 0.85em; border-radius: 3px;
     vertical-align: -0.1em; border: 1px solid var(--line);
   }
+
+  .pv-section { margin-bottom: 2rem; }
+  .pv-section .kicker, .gallery-kicker { margin-bottom: 0.8rem; }
+  .pv-grid { display: grid; gap: 0.9rem; }
+  .pv-grid > * { min-width: 0; }
+  .pv-styles { grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); }
+  .pv-layouts { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
+  .pv-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 0; }
+  .pv-card img { display: block; width: 100%; aspect-ratio: 1200 / 630; height: auto; object-fit: cover; background: var(--surface-2); }
+  .pv-card figcaption { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.7rem; font-size: 0.8rem; flex-wrap: wrap; }
+  .pv-card figcaption .btn { margin-left: auto; }
+  .pv-loading img { opacity: 0.35; }
+  .pv-loading::after { content: 'rendering…'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
+  .pv-failed::after { content: 'preview unavailable'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
+
+  .opts-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0 1rem; margin-bottom: 0.6rem; }
+  .opts-row > * { min-width: 0; }
+  .theme-field { padding-top: 0.2rem; }
+
   .versions .kicker { margin-bottom: 0.8rem; }
   .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.9rem; }
   .designs-grid > * { min-width: 0; }
