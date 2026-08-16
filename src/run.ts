@@ -67,6 +67,14 @@ export interface RunOpts {
   models: ModelSpec[];
   iterations: number;
   refs: string[];
+  /**
+   * Per-idea EXTRA refs (paths/URIs), parallel to `ideas` — character-chain art
+   * and shot-scoped uploads. They come BEFORE the run-level refs in the cell's
+   * list (single-reference models only ever see the first image).
+   */
+  ideaRefs?: (string[] | null)[];
+  /** Per-idea refRole override, parallel to `ideas`; null = the run-level refRole. */
+  ideaRefRoles?: (string | null)[];
   title: string;
   kicker?: string;
   tagline?: string;
@@ -232,8 +240,32 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
     await mkdir(join(opts.outDir, 'video'), { recursive: true });
   }
 
-  const refUris = await Promise.all(opts.refs.map(toDataUri));
-  const runRefMp = await refMegapixels(opts.refs.filter((r) => !/^https?:|^data:/i.test(r)));
+  /** A ref resolved for the models (URI) plus its measured megapixels (0 when unmeasurable). */
+  interface RefEntry {
+    uri: string;
+    mp: number;
+  }
+  const toEntries = async (paths: string[]): Promise<RefEntry[]> =>
+    Promise.all(
+      paths.map(async (p) => ({
+        uri: await toDataUri(p),
+        mp: /^https?:|^data:/i.test(p) ? 0 : await refMegapixels([p]),
+      })),
+    );
+
+  const runRefs = await toEntries(opts.refs);
+  const runRefMp = runRefs.reduce((s, e) => s + e.mp, 0);
+  const ideaRefEntries = await Promise.all(
+    opts.ideas.map((_, i) => toEntries(opts.ideaRefs?.[i] ?? [])),
+  );
+
+  /** Bill what the model actually receives: none sees nothing, single sees the
+   *  first image only, the rest are capped at maxRefs — never the whole pile. */
+  const billedMp = (model: ModelSpec, entries: RefEntry[]): number => {
+    if (model.refStyle === 'none') return 0;
+    const seen = entries.slice(0, model.refStyle === 'single' ? 1 : model.maxRefs);
+    return seen.reduce((s, e) => s + e.mp, 0);
+  };
 
   interface Job {
     cell: Cell;
@@ -245,20 +277,29 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
 
   // Style-level refs come first: a style that ships its own reference means it, and
   // the single-reference models would otherwise never see it.
-  const styleRefCache = new Map<string, string[]>();
-  const refsOf = async (style: Style): Promise<string[]> => {
+  const styleRefCache = new Map<string, RefEntry[]>();
+  const refsOf = async (style: Style): Promise<RefEntry[]> => {
     const hit = styleRefCache.get(style.slug);
     if (hit) return hit;
-    const uris = style.refs.length ? await Promise.all(style.refs.map(toDataUri)) : [];
-    styleRefCache.set(style.slug, uris);
-    return uris;
+    const entries = style.refs.length ? await toEntries(style.refs) : [];
+    styleRefCache.set(style.slug, entries);
+    return entries;
   };
 
   const queue: Job[] = [];
-  for (const loopStyle of opts.styles) {
+  for (const [styleIndex, loopStyle] of opts.styles.entries()) {
     for (const [ideaIndex, idea] of opts.ideas.entries()) {
-      const style = opts.ideaStyles?.[ideaIndex] ?? loopStyle;
-      const cellRefs = [...(await refsOf(style)), ...refUris];
+      const override = opts.ideaStyles?.[ideaIndex] ?? null;
+      // An overridden idea renders ONLY its override — once, not once per loop
+      // style, which would bill N identical cells under multi-style.
+      if (override && styleIndex > 0) continue;
+      const style = override ?? loopStyle;
+      const cellEntries = [
+        ...(await refsOf(style)),
+        ...ideaRefEntries[ideaIndex]!,
+        ...runRefs,
+      ];
+      const cellRefs = cellEntries.map((e) => e.uri);
       for (const model of opts.models) {
         const tier = pickTier(model, opts.tier);
         for (let i = 1; i <= opts.iterations; i++) {
@@ -278,16 +319,14 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
                 style,
                 idea,
                 hasRefs: cellRefs.length > 0,
-                refRole: opts.refRole,
+                refRole: opts.ideaRefRoles?.[ideaIndex] ?? opts.refRole,
                 allowText: opts.allowText,
                 extra: opts.extra,
               }),
-              // Single-reference models only ever receive one image, so they are never
-              // billed for the rest of the pile.
               costUsd: priceOf(
                 model,
                 tier,
-                model.refStyle === 'single' ? runRefMp / Math.max(cellRefs.length, 1) : runRefMp,
+                billedMp(model, cellEntries),
                 pickSeconds(model, opts.seconds),
               ),
             },

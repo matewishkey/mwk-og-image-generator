@@ -4,21 +4,15 @@ import Icon from '../../components/Icon.astro';
 import { ENV } from '../../lib/runtime';
 import { createProject } from '../../lib/projects';
 import { MODELS } from '../../../../src/models.ts';
-import { PROOFS_SLUG } from '../../lib/proofs';
+import { proofThumbs } from '../../lib/proofs';
+import { listStyles } from '../../lib/styles';
 
 const env = ENV;
 const team = Astro.locals.team;
 const user = Astro.locals.user!;
 if (!team) return new Response('No team', { status: 403 });
 
-const styles = await env.DB.prepare(
-  `SELECT s.id, s.slug, s.name, s.description, t.kind AS team_kind
-     FROM style s JOIN team t ON t.id = s.team_id
-    WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
-    ORDER BY t.kind DESC, s.name`,
-)
-  .bind(team.id)
-  .all<{ id: string; slug: string; name: string; description: string; team_kind: string }>();
+const styles = await listStyles(env, team.id);
 
 const kits = await env.DB.prepare(
   `SELECT b.id, b.name, t.kind AS team_kind FROM brand_kit b JOIN team t ON t.id = b.team_id
@@ -32,34 +26,22 @@ const imageModels = MODELS.filter((m) => m.modality === 'image');
 const DEFAULT_CHECKED = new Set(['zturbo', 'pimage']);
 
 // Latest 'face' proof thumb per style, so picking a style is picking a picture.
-const proofThumbs = await env.DB.prepare(
-  `SELECT style_id, thumb_key FROM (
-     SELECT t.style_id, t.thumb_key,
-            row_number() OVER (PARTITION BY t.style_id ORDER BY t.created_at DESC) AS rn
-       FROM take t
-       JOIN run r ON r.id = t.run_id
-       JOIN project p ON p.id = r.project_id
-       JOIN shot sh ON sh.id = t.shot_id
-      WHERE p.team_id = ?1 AND p.slug = ?2
-        AND t.status = 'succeeded' AND t.thumb_key IS NOT NULL AND sh.label = 'face'
-   ) WHERE rn = 1`,
-)
-  .bind(team.id, PROOFS_SLUG)
-  .all<{ style_id: string; thumb_key: string }>();
-const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_key]));
+const proofThumb = await proofThumbs(env, team.id);
 
 let error = '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const styleId = String(form.get('style') ?? '');
-  if (!styles.results.some((s) => s.id === styleId)) error = 'Pick a style.';
+  const known = new Set(styles.map((s) => s.id));
+  const styleIds = [...new Set(form.getAll('styles').map(String))].filter((id) => known.has(id));
+  if (!styleIds.length) error = 'Pick at least one style.';
   else {
     const result = await createProject(env, {
       teamId: team.id,
       userId: user.id,
       name: String(form.get('name') ?? ''),
       description: String(form.get('description') ?? ''),
-      style: styleId,
+      style: styleIds[0]!,
+      styles: styleIds,
       brandKit: String(form.get('brandkit') ?? '') || undefined,
       models: form.getAll('models').map(String),
       iterations: Number(form.get('iterations') ?? 1),
@@ -74,7 +56,7 @@ if (Astro.request.method === 'POST') {
   <div class="page-head">
     <p class="kicker"><span class="g">/</span>New project</p>
     <h1>New project</h1>
-    <p class="sub">One style, a set of models, and the shots you want. Start cheap — draft on the half-cent models, finish on gpt2.</p>
+    <p class="sub">Styles, a set of models, and the shots you want — every shot renders in every checked style. Start cheap — draft on the half-cent models, finish on gpt2.</p>
   </div>
 
   {error && <p class="flash">{error}</p>}
@@ -89,11 +71,11 @@ if (Astro.request.method === 'POST') {
       <input type="text" name="description" placeholder="optional" />
     </label>
     <fieldset class="field">
-      <span>Style — the look every shot renders in (a shot can override it later)</span>
+      <span>Styles — every shot renders in EVERY checked style; the first checked is the primary (a shot can override later)</span>
       <div class="style-grid">
-        {styles.results.map((s) => (
+        {styles.map((s) => (
           <label class="style-pick">
-            <input type="radio" name="style" value={s.id} required />
+            <input type="checkbox" name="styles" value={s.id} />
             {proofThumb.has(s.id) && <img class="style-pick-img" src={`/img/${proofThumb.get(s.id)}`} alt="" loading="lazy" />}
             <span class="style-head">
               <b>{s.name}</b>

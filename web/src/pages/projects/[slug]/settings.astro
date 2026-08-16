@@ -5,7 +5,8 @@ import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import { MODELS } from '../../../../../src/models.ts';
 import { EXTRA_PRESETS } from '../../../../../src/prompt.ts';
-import { PROOFS_SLUG } from '../../../lib/proofs';
+import { proofThumbs } from '../../../lib/proofs';
+import { listStyles } from '../../../lib/styles';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -15,14 +16,7 @@ const slug = Astro.params.slug!;
 let bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
 
-const styles = await env.DB.prepare(
-  `SELECT s.id, s.name, s.description, t.kind AS team_kind FROM style s JOIN team t ON t.id = s.team_id
-    WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
-    ORDER BY t.kind DESC, s.name`,
-)
-  .bind(team.id)
-  .all<{ id: string; name: string; description: string; team_kind: string }>();
-
+const styles = await listStyles(env, team.id);
 const imageModels = MODELS.filter((m) => m.modality === 'image');
 
 let error = '';
@@ -30,24 +24,28 @@ let note = '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const name = String(form.get('name') ?? '').trim();
-  const styleId = String(form.get('style') ?? '');
+  const known = new Set(styles.map((s) => s.id));
+  const styleIds = [...new Set(form.getAll('styles').map(String))].filter((id) => known.has(id));
   const models = form.getAll('models').map(String);
   const iterations = Math.max(1, Math.min(8, Number(form.get('iterations') ?? 1)));
 
   if (!name) error = 'A project needs a name.';
   else if (!models.length) error = 'Pick at least one model.';
-  else if (!styles.results.some((s) => s.id === styleId)) error = 'Pick a style.';
+  else if (!styleIds.length) error = 'Pick at least one style.';
   else {
-    await env.DB.prepare(
-      `UPDATE project SET name=?1, description=?2, default_style_id=?3, models=?4,
-         iterations=?5, allow_text=?6, extra=?7, title=?8, kicker=?9, tagline=?10,
-         version=version+1, updated_at=?11
-       WHERE id=?12`,
-    )
-      .bind(
+    // The first checked style is the primary (previews, fallback); the whole
+    // set is what a run renders every shot in.
+    const projectId = bundle.project.id;
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE project SET name=?1, description=?2, default_style_id=?3, models=?4,
+           iterations=?5, allow_text=?6, extra=?7, title=?8, kicker=?9, tagline=?10,
+           version=version+1, updated_at=?11
+         WHERE id=?12`,
+      ).bind(
         name,
         String(form.get('description') ?? '').trim(),
-        styleId,
+        styleIds[0],
         JSON.stringify(models),
         iterations,
         form.get('allow_text') ? 1 : 0,
@@ -56,32 +54,23 @@ if (Astro.request.method === 'POST') {
         String(form.get('kicker') ?? '').trim() || null,
         String(form.get('tagline') ?? '').trim() || null,
         new Date().toISOString(),
-        bundle.project.id,
-      )
-      .run();
+        projectId,
+      ),
+      env.DB.prepare(`DELETE FROM project_style WHERE project_id=?1`).bind(projectId),
+      ...styleIds.map((id, i) =>
+        env.DB.prepare(
+          `INSERT INTO project_style (project_id, style_id, position) VALUES (?1, ?2, ?3)`,
+        ).bind(projectId, id, i + 1),
+      ),
+    ]);
     note = 'Saved. The next run uses these settings; past takes are untouched.';
     bundle = (await loadProject(env, team.id, slug))!;
   }
 }
 
 const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
-
-// Latest 'face' proof thumb per style — same preview the Shots strip shows.
-const proofThumbs = await env.DB.prepare(
-  `SELECT style_id, thumb_key FROM (
-     SELECT t.style_id, t.thumb_key,
-            row_number() OVER (PARTITION BY t.style_id ORDER BY t.created_at DESC) AS rn
-       FROM take t
-       JOIN run r ON r.id = t.run_id
-       JOIN project p ON p.id = r.project_id
-       JOIN shot sh ON sh.id = t.shot_id
-      WHERE p.team_id = ?1 AND p.slug = ?2
-        AND t.status = 'succeeded' AND t.thumb_key IS NOT NULL AND sh.label = 'face'
-   ) WHERE rn = 1`,
-)
-  .bind(team.id, PROOFS_SLUG)
-  .all<{ style_id: string; thumb_key: string }>();
-const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_key]));
+const chosenStyles = new Set(bundle.styles.map((s) => s.id));
+const proofThumb = await proofThumbs(env, team.id);
 ---
 
 <Base title={`${bundle.project.name} · settings`} nav="projects" project={{ slug, name: bundle.project.name, active: 'settings' }}>
@@ -103,15 +92,16 @@ const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_k
         <input type="text" name="description" value={bundle.project.description} /></label>
     </div>
     <fieldset class="field">
-      <span>Default style — a run renders every shot through this (a shot can override it)</span>
+      <span>Styles — a run renders every shot in EVERY checked style (the first checked is the primary; a shot can still override)</span>
       <div class="style-grid">
-        {styles.results.map((s) => (
+        {styles.map((s) => (
           <label class="style-pick">
-            <input type="radio" name="style" value={s.id} checked={s.id === bundle.project.default_style_id} />
+            <input type="checkbox" name="styles" value={s.id} checked={chosenStyles.has(s.id)} />
             {proofThumb.has(s.id) && <img class="style-pick-img" src={`/img/${proofThumb.get(s.id)}`} alt="" loading="lazy" />}
             <span class="style-head">
               <b>{s.name}</b>
               {s.team_kind === 'house' && <em class="chip">house</em>}
+              {s.id === bundle.project.default_style_id && <em class="chip primary-chip">primary</em>}
             </span>
             <span class="style-desc">{s.description}</span>
           </label>
@@ -204,6 +194,7 @@ const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_k
     color: var(--mute); border: 1px solid var(--line); border-radius: 999px;
     padding: 0.15rem 0.45rem; font-style: normal;
   }
+  .primary-chip { color: var(--accent); border-color: var(--accent); }
 
   .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 0.5rem; }
   .model-grid > * { min-width: 0; }

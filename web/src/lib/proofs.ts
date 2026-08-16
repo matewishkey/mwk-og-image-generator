@@ -23,6 +23,33 @@ export const PROOF_PROMPTS: { label: string; prompt: string }[] = [
 
 export const PROOFS_SLUG = '_style-proofs';
 
+/**
+ * Latest succeeded proof thumb per style for one proof label (default 'face') —
+ * the preview used by style pickers. One query, shared by every page that shows
+ * style thumbs (was copy-pasted four times before round 3).
+ */
+export async function proofThumbs(
+  env: Env,
+  teamId: string,
+  label = 'face',
+): Promise<Map<string, string>> {
+  const rows = await env.DB.prepare(
+    `SELECT style_id, thumb_key FROM (
+       SELECT t.style_id, t.thumb_key,
+              row_number() OVER (PARTITION BY t.style_id ORDER BY t.created_at DESC) AS rn
+         FROM take t
+         JOIN run r ON r.id = t.run_id
+         JOIN project p ON p.id = r.project_id
+         JOIN shot sh ON sh.id = t.shot_id
+        WHERE p.team_id = ?1 AND p.slug = ?2
+          AND t.status = 'succeeded' AND t.thumb_key IS NOT NULL AND sh.label = ?3
+     ) WHERE rn = 1`,
+  )
+    .bind(teamId, PROOFS_SLUG, label)
+    .all<{ style_id: string; thumb_key: string }>();
+  return new Map(rows.results.map((r) => [r.style_id, r.thumb_key]));
+}
+
 export async function ensureProofsProject(
   env: Env,
   teamId: string,
@@ -63,11 +90,11 @@ export async function ensureProofsProject(
   }
 
   const shots = await env.DB.prepare(
-    `SELECT id, position, label, prompt, style_override_id FROM shot
+    `SELECT id, position, label, prompt, style_override_id, ref_role FROM shot
       WHERE project_id = ?1 AND deleted_at IS NULL ORDER BY position`,
   )
     .bind(project.id)
-    .all<{ id: string; position: number; label: string | null; prompt: string; style_override_id: string | null }>();
+    .all<{ id: string; position: number; label: string | null; prompt: string; style_override_id: string | null; ref_role: string | null }>();
   return { project, shots: shots.results };
 }
 
@@ -81,7 +108,7 @@ export async function runProofs(
     teamId: o.teamId,
     userId: o.userId,
     project,
-    style: o.style,
+    styles: [o.style],
     shots,
     models: [PROOF_MODEL],
     iterations: 1,

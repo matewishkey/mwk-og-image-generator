@@ -50,7 +50,7 @@ export async function ensurePromosProject(
   }
 
   const shots = await env.DB.prepare(
-    `SELECT id, position, label, prompt, style_override_id FROM shot
+    `SELECT id, position, label, prompt, style_override_id, ref_role FROM shot
       WHERE project_id = ?1 AND deleted_at IS NULL ORDER BY position`,
   )
     .bind(project.id)
@@ -69,7 +69,7 @@ export async function runPromos(env: Env, o: { teamId: string; userId: string })
     teamId: o.teamId,
     userId: o.userId,
     project,
-    style,
+    styles: [style],
     shots,
     models: MODELS.filter((m) => m.modality === 'image').map((m) => m.alias),
     iterations: 1,

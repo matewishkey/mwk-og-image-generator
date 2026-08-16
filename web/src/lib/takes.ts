@@ -17,12 +17,12 @@ export async function applyTakeAction(env: Env, o: TakeActionOpts): Promise<Take
   const nowIso = new Date().toISOString();
 
   const take = await env.DB.prepare(
-    `SELECT t.id, t.shot_id, t.model_alias, t.status FROM take t
+    `SELECT t.id, t.shot_id, t.model_alias, t.status, t.style_id FROM take t
       JOIN run r ON r.id = t.run_id
      WHERE t.id = ?1 AND t.team_id = ?2 AND r.project_id = ?3`,
   )
     .bind(o.takeId, o.team.id, o.bundle.project.id)
-    .first<{ id: string; shot_id: string; model_alias: string; status: string }>();
+    .first<{ id: string; shot_id: string; model_alias: string; status: string; style_id: string }>();
   if (!take) return { error: 'No such take in this project.', status: 404 };
 
   if (o.action === 'pick') {
@@ -53,8 +53,10 @@ export async function applyTakeAction(env: Env, o: TakeActionOpts): Promise<Take
       teamId: o.team.id,
       userId: o.userId,
       project: o.bundle.project,
-      style: o.bundle.style,
-      shots: [shot],
+      styles: o.bundle.styles,
+      // A re-roll reproduces the take's OWN style, whatever the project set is
+      // now — forcing it as the shot's override pins exactly one style.
+      shots: [{ ...shot, style_override_id: take.style_id }],
       models: [take.model_alias],
       iterations: 1,
       kind: 'take',

@@ -3,16 +3,19 @@ import { ENV } from '../../../../lib/runtime';
 import { err, ok, readJson } from '../../../../lib/api';
 import { loadProject, type ProjectBundle } from '../../../../lib/data';
 import { createRun } from '../../../../lib/runs';
+import { suggestShotVariants } from '../../../../lib/generate';
 import { ulid } from '../../../../lib/ulid';
 
 interface ShotBody {
-  action?: 'add' | 'edit' | 'delete' | 'set-style' | 'reshoot';
+  action?: 'add' | 'edit' | 'delete' | 'set-style' | 'reshoot' | 'suggest';
   prompt?: string;
   label?: string;
   /** Shot id, position (as number or numeric string), or label. */
   shot?: string | number;
   /** Style id or slug for add/edit/set-style; empty string clears the override. */
   style?: string;
+  /** edit: per-shot "who the reference person is"; empty string clears it. */
+  refRole?: string;
 }
 
 /** A shot can be addressed by id, position, or label — 'Shot 2' beats a ULID in conversation. */
@@ -75,12 +78,36 @@ export const POST: APIRoute = async (ctx) => {
     const prompt = (body.prompt ?? shot.prompt).trim();
     if (!prompt) return err(400, 'prompt cannot be empty');
     const label = body.label !== undefined ? body.label.trim() || null : shot.label;
+    const refRole = body.refRole !== undefined ? body.refRole.trim() || null : shot.ref_role;
     await ENV.DB.prepare(
-      `UPDATE shot SET prompt=?1, label=?2, version=version+1, updated_at=?3 WHERE id=?4`,
+      `UPDATE shot SET prompt=?1, label=?2, ref_role=?3, version=version+1, updated_at=?4 WHERE id=?5`,
     )
-      .bind(prompt, label, now, shot.id)
+      .bind(prompt, label, refRole, now, shot.id)
       .run();
     return ok({ ok: true, shotId: shot.id });
+  }
+
+  if (body.action === 'suggest') {
+    try {
+      const anyRefs = await ENV.DB.prepare(
+        `SELECT 1 FROM reference_use
+          WHERE (owner_type='project' AND owner_id=?1) OR (owner_type='shot' AND owner_id=?2)
+          LIMIT 1`,
+      )
+        .bind(bundle.project.id, shot.id)
+        .first();
+      const variants = await suggestShotVariants(ENV, {
+        current: shot.prompt,
+        projectName: bundle.project.name,
+        otherShots: bundle.shots.filter((s) => s.id !== shot.id).map((s) => s.prompt),
+        n: 3,
+        hasRefs: !!anyRefs,
+        refRole: shot.ref_role ?? bundle.project.ref_role ?? undefined,
+      });
+      return ok({ shotId: shot.id, variants });
+    } catch (e) {
+      return err(502, `the co-writer failed: ${(e as Error).message}`);
+    }
   }
 
   if (body.action === 'set-style') {
@@ -103,13 +130,13 @@ export const POST: APIRoute = async (ctx) => {
         teamId: team.id,
         userId: user.id,
         project: bundle.project,
-        style: bundle.style,
+        styles: bundle.styles,
         shots: [shot],
         models: JSON.parse(bundle.project.models),
         iterations: bundle.project.iterations,
         kind: 'shot',
       });
-      return ok({ ok: true, runId, url: `/projects/${bundle.project.slug}/takes` }, 201);
+      return ok({ ok: true, runId, url: `/projects/${bundle.project.slug}/shots` }, 201);
     } catch (e) {
       return err(502, `the re-shoot could not start: ${(e as Error).message}`);
     }

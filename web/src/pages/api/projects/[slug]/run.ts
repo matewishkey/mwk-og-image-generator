@@ -21,21 +21,24 @@ export const POST: APIRoute = async (ctx) => {
       teamId: team.id,
       userId: user.id,
       project: bundle.project,
-      style: bundle.style,
+      styles: bundle.styles,
       shots: bundle.shots,
       models,
       iterations: bundle.project.iterations,
       kind: 'full',
     });
     const refs = await loadProjectRefs(ENV, bundle.project.id);
-    const cells = bundle.shots.length * bundle.project.iterations;
+    const cells = bundle.shots.reduce(
+      (n, s) => n + (s.style_override_id ? 1 : bundle.styles.length) * bundle.project.iterations,
+      0,
+    );
     return ok(
       {
         runId,
         takes: cells * models.length,
         estimatedUsd:
           estimateMicros(models, bundle.project.tier, cells, refs.megapixels) / 1_000_000,
-        url: `/projects/${bundle.project.slug}/takes`,
+        url: `/projects/${bundle.project.slug}/shots`,
       },
       201,
     );

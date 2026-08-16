@@ -41,12 +41,22 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   if (event.kind === 'cell') {
-    const take = await env.DB.prepare(
-      `SELECT id, team_id FROM take
-        WHERE run_id=?1 AND shot_id=?2 AND model_alias=?3 AND iteration=?4`,
-    )
-      .bind(event.runId, event.shotId, event.modelAlias, event.iteration)
-      .first<{ id: string; team_id: string }>();
+    // styleSlug disambiguates multi-style runs (same shot × model × iteration,
+    // one cell per style). Events from an older engine lack it — match legacy.
+    const take = event.styleSlug
+      ? await env.DB.prepare(
+          `SELECT t.id, t.team_id FROM take t JOIN style s ON s.id = t.style_id
+            WHERE t.run_id=?1 AND t.shot_id=?2 AND t.model_alias=?3 AND t.iteration=?4
+              AND s.slug=?5`,
+        )
+          .bind(event.runId, event.shotId, event.modelAlias, event.iteration, event.styleSlug)
+          .first<{ id: string; team_id: string }>()
+      : await env.DB.prepare(
+          `SELECT id, team_id FROM take
+            WHERE run_id=?1 AND shot_id=?2 AND model_alias=?3 AND iteration=?4`,
+        )
+          .bind(event.runId, event.shotId, event.modelAlias, event.iteration)
+          .first<{ id: string; team_id: string }>();
     if (!take) return new Response('unknown take', { status: 404 });
 
     const costMicros = Math.round(event.costUsd * 1_000_000);

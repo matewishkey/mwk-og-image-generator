@@ -22,8 +22,17 @@ export interface SeamIdea {
    * happened, where every take's billed prompt carried the style text twice.
    */
   prompt: string;
-  /** Per-shot style override; absent = the run-level style. */
+  /** Per-shot style override; absent = the run-level style(s). */
   style?: Style;
+  /**
+   * R2 keys of reference images that apply to THIS shot only — character-chain
+   * art first, then shot-scoped uploads. They come BEFORE the run-level refKeys
+   * in the model's ref list (specific beats general, and single-reference models
+   * only ever see the first image), matching the numbering the composed prompt uses.
+   */
+  refKeys?: string[];
+  /** Per-shot "who the reference person is"; absent = the run-level refRole. */
+  refRole?: string;
 }
 
 export interface EngineRunRequest {
@@ -33,6 +42,12 @@ export interface EngineRunRequest {
   /** Idea i (1-based, as in run.ts) is ideas[i-1]; its takes belong to that shot. */
   ideas: SeamIdea[];
   style: Style;
+  /**
+   * Multi-style runs: every shot renders once per style (shots with a SeamIdea
+   * style override render ONLY their override). Absent = [style]. The slugs must
+   * be distinct within one run — the cell event correlates takes by style slug.
+   */
+  styles?: Style[];
   /** Model aliases, resolved against src/models.ts on the engine side. */
   models: string[];
   iterations: number;
@@ -260,6 +275,8 @@ export type EngineEvent =
       kind: 'cell';
       runId: string;
       shotId: string;
+      /** Slug of the style this cell rendered in — the take key under multi-style. */
+      styleSlug: string;
       modelAlias: string;
       modelId: string;
       iteration: number;

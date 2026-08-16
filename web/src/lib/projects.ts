@@ -11,6 +11,11 @@ export interface CreateProjectOpts {
   description?: string;
   /** Style id or slug, resolved against team-or-house styles (team wins). */
   style: string;
+  /**
+   * The full style SET (ids/slugs) for multi-style runs; the first entry is the
+   * primary. Absent = [style]. When present, `style` is ignored.
+   */
+  styles?: string[];
   /** Brand kit id or slug; omitted = the team's kit, falling back to house. */
   brandKit?: string;
   models: string[];
@@ -29,15 +34,21 @@ export async function createProject(env: Env, o: CreateProjectOpts): Promise<Cre
   if (unknown.length) return { error: `Unknown model(s): ${unknown.join(', ')}`, status: 400 };
   const iterations = Math.max(1, Math.min(8, Math.round(o.iterations ?? 1)));
 
-  const style = await env.DB.prepare(
-    `SELECT s.id FROM style s JOIN team t ON t.id = s.team_id
-      WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
-        AND (s.id = ?2 OR s.slug = ?2)
-      ORDER BY t.kind DESC LIMIT 1`,
-  )
-    .bind(o.teamId, o.style)
-    .first<{ id: string }>();
-  if (!style) return { error: `No style "${o.style}".`, status: 400 };
+  const wanted = o.styles?.length ? o.styles : [o.style];
+  const styleIds: string[] = [];
+  for (const ref of wanted) {
+    const row = await env.DB.prepare(
+      `SELECT s.id FROM style s JOIN team t ON t.id = s.team_id
+        WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
+          AND (s.id = ?2 OR s.slug = ?2)
+        ORDER BY t.kind DESC LIMIT 1`,
+    )
+      .bind(o.teamId, ref)
+      .first<{ id: string }>();
+    if (!row) return { error: `No style "${ref}".`, status: 400 };
+    if (!styleIds.includes(row.id)) styleIds.push(row.id);
+  }
+  const style = { id: styleIds[0]! };
 
   const kit = o.brandKit
     ? await env.DB.prepare(
@@ -61,15 +72,16 @@ export async function createProject(env: Env, o: CreateProjectOpts): Promise<Cre
 
   const slug = slugify(name) || ulid().toLowerCase();
   const now = new Date().toISOString();
+  const projectId = ulid();
   try {
-    await env.DB.prepare(
-      `INSERT INTO project (id, team_id, slug, name, description, default_style_id,
-         brand_kit_id, models, iterations, allow_text, title, tagline,
-         created_by, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13, ?13)`,
-    )
-      .bind(
-        ulid(),
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO project (id, team_id, slug, name, description, default_style_id,
+           brand_kit_id, models, iterations, allow_text, title, tagline,
+           created_by, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13, ?13)`,
+      ).bind(
+        projectId,
         o.teamId,
         slug,
         name,
@@ -82,8 +94,13 @@ export async function createProject(env: Env, o: CreateProjectOpts): Promise<Cre
         kit.default_tagline,
         o.userId,
         now,
-      )
-      .run();
+      ),
+      ...styleIds.map((id, i) =>
+        env.DB.prepare(
+          `INSERT INTO project_style (project_id, style_id, position) VALUES (?1, ?2, ?3)`,
+        ).bind(projectId, id, i + 1),
+      ),
+    ]);
     return { slug };
   } catch (e) {
     return /UNIQUE/.test((e as Error).message)

@@ -128,28 +128,50 @@ async function resolveBrand(raw: unknown, markKey?: string): Promise<BrandConfig
   return brand;
 }
 
-async function executeRun(req: EngineRunRequest, refBytes: Buffer[], brand: BrandConfig): Promise<void> {
+async function executeRun(req: EngineRunRequest, refBytes: Map<string, Buffer>, brand: BrandConfig): Promise<void> {
   const outDir = join(tmpdir(), `run-${req.runId}`);
   await mkdir(outDir, { recursive: true });
   const uploads: Promise<void>[] = [];
 
   try {
-    // References arrive as R2 keys; runSweep gets ordinary file paths.
+    // References arrive as R2 keys; runSweep gets ordinary file paths. A key
+    // shared by several ideas (the same chained character) is written once.
+    const refPathByKey = new Map<string, string>();
+    let refN = 0;
+    const localRef = async (key: string): Promise<string> => {
+      const hit = refPathByKey.get(key);
+      if (hit) return hit;
+      const bytes = refBytes.get(key);
+      if (!bytes) throw new Error(`ref ${key} was not prefetched`);
+      const p = join(outDir, `ref-${refN++}${extname(key) || '.png'}`);
+      await writeFile(p, new Uint8Array(bytes));
+      refPathByKey.set(key, p);
+      return p;
+    };
     const refPaths: string[] = [];
-    for (const [i, key] of req.refKeys.entries()) {
-      const p = join(outDir, `ref-${i}${extname(key) || '.png'}`);
-      await writeFile(p, new Uint8Array(refBytes[i]!));
-      refPaths.push(p);
+    for (const key of req.refKeys) refPaths.push(await localRef(key));
+    const ideaRefs: (string[] | null)[] = [];
+    for (const idea of req.ideas) {
+      if (!idea.refKeys?.length) {
+        ideaRefs.push(null);
+        continue;
+      }
+      const paths: string[] = [];
+      for (const key of idea.refKeys) paths.push(await localRef(key));
+      ideaRefs.push(paths);
     }
 
     const models = req.models.map(resolveModel);
     // SeamIdea.prompt is the RAW shot idea; runSweep composes it with the style
     // exactly once. Per-shot style overrides ride along in ideaStyles.
     const ideas = req.ideas.map((i) => i.prompt);
+    const styles = req.styles?.length ? req.styles : [req.style];
     const opts = {
       ideas,
       ideaStyles: req.ideas.map((i) => i.style ?? null),
-      styles: [req.style],
+      ideaRefs,
+      ideaRefRoles: req.ideas.map((i) => i.refRole ?? null),
+      styles,
       models,
       iterations: req.iterations,
       refs: refPaths,
@@ -166,7 +188,10 @@ async function executeRun(req: EngineRunRequest, refBytes: Buffer[], brand: Bran
     };
 
     const refMp = await refMegapixels(refPaths);
-    const total = ideas.length * models.length * req.iterations;
+    // Mirrors runSweep's queue: an overridden idea renders once, not per style.
+    const overridden = req.ideas.filter((i) => i.style).length;
+    const total =
+      (overridden + (ideas.length - overridden) * styles.length) * models.length * req.iterations;
     await postEvent({
       kind: 'run-started',
       runId: req.runId,
@@ -196,7 +221,9 @@ async function executeRun(req: EngineRunRequest, refBytes: Buffer[], brand: Bran
 
 async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Promise<void> {
   const shotId = req.ideas[cell.ideaIndex - 1]?.shotId ?? 'unknown';
-  const base = `${req.r2Prefix}/takes/${shotId}__${cell.model}__${cell.iteration}`;
+  // The style is part of the key: under multi-style the same shot × model ×
+  // iteration renders once PER style, and identical keys would silently overwrite.
+  const base = `${req.r2Prefix}/takes/${shotId}__${cell.style}__${cell.model}__${cell.iteration}`;
 
   let artKey: string | undefined;
   let cardKey: string | undefined;
@@ -232,6 +259,7 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
     kind: 'cell',
     runId: req.runId,
     shotId,
+    styleSlug: cell.style,
     modelAlias: cell.model,
     modelId: cell.modelId,
     iteration: cell.iteration,
@@ -333,8 +361,10 @@ const server = createServer((req, res) => {
       }
       // Resolve refs and the kit before acknowledging, so a bad key or a broken
       // kit fails the request (createRun marks the run failed/dispatch), not the run.
-      const refBytes: Buffer[] = [];
-      for (const key of parsed.refKeys) refBytes.push(await r2Get(key));
+      const refKeys = new Set<string>(parsed.refKeys);
+      for (const idea of parsed.ideas) for (const k of idea.refKeys ?? []) refKeys.add(k);
+      const refBytes = new Map<string, Buffer>();
+      for (const key of refKeys) refBytes.set(key, await r2Get(key));
       const runBrand = await resolveBrand(parsed.brand, parsed.markKey);
       activeRuns.add(parsed.runId);
       executeRun(parsed, refBytes, runBrand).catch((e) => console.error(`run ${parsed.runId}:`, e));
