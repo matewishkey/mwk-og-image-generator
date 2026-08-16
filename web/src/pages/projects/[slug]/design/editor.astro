@@ -1,0 +1,92 @@
+---
+/**
+ * The layout editor page (round 4): knobs + a live preview against the
+ * project's real picks. ?from=<layoutId> starts from a saved layout.
+ */
+import Base from '../../../../layouts/Base.astro';
+import LayoutEditor from '../../../../components/ws/LayoutEditor';
+import { ENV } from '../../../../lib/runtime';
+import { loadProject } from '../../../../lib/data';
+import { LayoutConfigSchema, layoutPanels } from '../../../../../../src/seam.ts';
+import { EFFECTS } from '../../../../../../src/effects.ts';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+const bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+
+const picks = await env.DB.prepare(
+  `SELECT count(*) AS n FROM shot sh JOIN take t ON t.id = sh.picked_take_id
+    WHERE sh.project_id = ?1 AND sh.deleted_at IS NULL AND t.art_key IS NOT NULL`,
+)
+  .bind(bundle.project.id)
+  .first<{ n: number }>();
+const pickCount = picks?.n ?? 0;
+
+const layouts = await env.DB.prepare(
+  `SELECT l.id, l.name, l.config FROM layout l JOIN team t ON t.id = l.team_id
+    WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL
+    ORDER BY t.kind DESC, l.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; name: string; config: string }>();
+const usable = layouts.results.filter((l) => {
+  const cfg = LayoutConfigSchema.safeParse(JSON.parse(l.config));
+  return cfg.success && layoutPanels(cfg.data) <= pickCount;
+});
+
+const formats = await env.DB.prepare(
+  `SELECT id, name, width, height FROM format ORDER BY rowid`,
+).all<{ id: string; name: string; width: number; height: number }>();
+
+const kit = await env.DB.prepare(`SELECT config FROM brand_kit WHERE id = ?1`)
+  .bind(bundle.project.brand_kit_id)
+  .first<{ config: string }>();
+const kitHasDark = (() => {
+  try {
+    const c = JSON.parse(kit?.config ?? '') as { colorsDark?: Record<string, string> };
+    return !!c.colorsDark && Object.keys(c.colorsDark).length > 0;
+  } catch {
+    return false;
+  }
+})();
+
+const fromId = Astro.url.searchParams.get('from');
+const from = usable.find((l) => l.id === fromId) ?? usable[0];
+const initialConfig = from ? JSON.parse(from.config) : { archetype: 'hero', lockup: 'bottom' };
+const initialName = from ? `${from.name} (edited)` : 'My layout';
+
+const initial = {
+  slug,
+  layouts: usable,
+  formats: formats.results,
+  effects: EFFECTS.map((e) => ({ slug: e.slug, label: e.label })),
+  defaults: {
+    title: bundle.project.title ?? '',
+    kicker: bundle.project.kicker ?? '',
+    tagline: bundle.project.tagline ?? '',
+  },
+  initialConfig,
+  initialName,
+  kitHasDark,
+  pickCount,
+};
+---
+
+<Base title={`${bundle.project.name} · editor`} nav="projects" project={{ slug, name: bundle.project.name, active: 'design' }}>
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span><a href={`/projects/${slug}/design`}>{bundle.project.name} · design</a></p>
+    <h1>Layout editor</h1>
+    <p class="sub">
+      Turn the knobs, watch the real card re-render — every preview is $0.00 and nothing is
+      saved until you say so. Colors are brand tokens, so a template serves every kit.
+    </p>
+  </div>
+
+  {pickCount === 0
+    ? <p class="sub">No picks yet — <a href={`/projects/${slug}/shots`}>pick a take per shot</a> first; the editor renders against them.</p>
+    : <LayoutEditor client:load initial={initial} />}
+</Base>

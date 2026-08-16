@@ -1,0 +1,16 @@
+name: Low Poly
+description: >-
+  Faceted triangular 3D with flat per-face shading. Clean tech-abstract geometry.
+look: >-
+  Low-poly 3D render: every form built from visible triangular facets with flat per-face
+  shading — no smoothing, no textures. Soft ambient studio lighting gives each facet a
+  distinct tone within a restrained palette of three or four hues plus their shades.
+  Clean gradient-sky or single-colour backdrop, a subtle soft shadow under the scene,
+  crisp silhouettes. Composition floats like a geometric diorama.
+subject: >-
+  A faceted low-poly figure with readable proportions — hair, glasses and clothing as
+  distinct colour groups of facets, no facial texture.
+avoid: >-
+  smooth surfaces, texture maps, outlines, photorealism, high-frequency detail
+tags: [3d, low-poly, faceted, tech]
+origin: hand

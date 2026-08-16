@@ -515,3 +515,22 @@ svg.i { width: 1em; height: 1em; flex: none; vertical-align: -0.125em; }
 .ws-hl-back mark.tok { background: color-mix(in srgb, var(--accent) 28%, transparent); color: transparent; border-radius: 3px; }
 .ws-hl-back mark.tok.warn { background: color-mix(in srgb, var(--red) 30%, transparent); }
 .ws-hl-ta { position: relative; background: transparent; resize: none; overflow: hidden; width: 100%; }
+
+/* ---------- the layout editor ---------- */
+.le { display: grid; grid-template-columns: minmax(24rem, 34rem) 1fr; gap: 1.4rem; align-items: start; }
+@media (width <= 980px) { .le { grid-template-columns: 1fr; } }
+.le-controls { display: grid; gap: 0.9rem; }
+.le-mode { display: flex; gap: 0.4rem; }
+.le-group { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem; display: grid; gap: 0.7rem; }
+.le-item { border-top: 1px dashed var(--line); padding-top: 0.55rem; display: grid; gap: 0.4rem; }
+.le-row { display: flex; gap: 0.55rem; align-items: end; flex-wrap: wrap; }
+.le-num { display: grid; gap: 0.15rem; width: 5rem; }
+.le-num.wide { flex: 1; min-width: 10rem; width: auto; }
+.le-num.inline { display: inline-flex; align-items: center; gap: 0.25rem; width: auto; }
+.le-num > span { font: 700 0.62rem/1 var(--font-label); letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.le-num input, .le-num select { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+.le-edges { align-items: center; color: var(--faint); font-size: 0.8rem; }
+.le-del { margin-left: auto; }
+.le-save { position: sticky; bottom: 0.5rem; }
+.le-preview { position: sticky; top: 1rem; }
+.le-preview img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); }

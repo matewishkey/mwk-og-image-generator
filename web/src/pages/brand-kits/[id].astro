@@ -136,6 +136,12 @@ if (Astro.request.method === 'POST' && editable) {
       };
       const str = (k: string, fallback: string): string =>
         String(form.get(k) ?? '').trim() || fallback;
+      // Dark palette: only non-empty fields land; all empty = no dark palette.
+      const darkEntries = (
+        ['paper', 'ink', 'mute', 'faint', 'red', 'redField', 'redDeep', 'line', 'onRed'] as const
+      )
+        .map((k) => [k, String(form.get(`colorsDark.${k}`) ?? '').trim()] as const)
+        .filter(([, v]) => v !== '');
       const draft = {
         ...cur,
         colors: {
@@ -149,6 +155,7 @@ if (Astro.request.method === 'POST' && editable) {
           line: str('colors.line', cur.colors.line),
           onRed: str('colors.onRed', cur.colors.onRed),
         },
+        colorsDark: darkEntries.length ? Object.fromEntries(darkEntries) : undefined,
         scrim: {
           startY: num('scrim.startY', cur.scrim.startY),
           opacity: num('scrim.opacity', cur.scrim.opacity),
@@ -234,7 +241,8 @@ const previewTitle = (kit.default_title ?? 'Your *Brand* Here').split(/\*([^*]+)
         <p class="kicker"><span class="g">/</span>Identity</p>
         <label class="field"><span>Name</span><input type="text" name="name" value={kit.name} required /></label>
         <div class="form-grid">
-          <label class="field"><span>Default title — *word* renders red</span>
+          <label class="field">
+            <span>Default title — *word* renders in the accent <i class="accent-dot" style={`background:${c.colors.redDeep}`} title={`redDeep ${c.colors.redDeep}`}></i></span>
             <input type="text" name="default_title" value={kit.default_title ?? ''} /></label>
           <label class="field"><span>Default kicker</span>
             <input type="text" name="default_kicker" value={kit.default_kicker ?? ''} /></label>
@@ -242,10 +250,10 @@ const previewTitle = (kit.default_title ?? 'Your *Brand* Here').split(/\*([^*]+)
             <input type="text" name="default_tagline" value={kit.default_tagline ?? ''} /></label>
         </div>
 
-        <p class="kicker"><span class="g">/</span>Colours — #rrggbb</p>
+        <p class="kicker"><span class="g">/</span>Colours — #rrggbb · redDeep is the ACCENT (emphasis + kickers at text size)</p>
         <div class="color-grid">
           {Object.entries(c.colors).map(([key, val]) => (
-            <label class="field color-field"><span>{key}</span>
+            <label class="field color-field"><span>{key}{key === 'redDeep' ? ' · accent' : ''}</span>
               <span class="color-row">
                 <input type="text" name={`colors.${key}`} value={val} pattern="#[0-9a-fA-F]{6}" class="mono" />
                 <span class="swatch" style={`background:${val}`} />
@@ -253,6 +261,50 @@ const previewTitle = (kit.default_title ?? 'Your *Brand* Here').split(/\*([^*]+)
             </label>
           ))}
         </div>
+
+        <p class="kicker">
+          <span class="g">/</span>Dark palette — used when a design renders with theme "dark"; blank = dark renders like light
+          {editable && <button type="button" class="linkish" id="derive-dark">derive from light</button>}
+        </p>
+        <div class="color-grid" id="dark-grid">
+          {(['paper', 'ink', 'mute', 'faint', 'red', 'redField', 'redDeep', 'line', 'onRed'] as const).map((key) => (
+            <label class="field color-field"><span>{key}</span>
+              <span class="color-row">
+                <input type="text" name={`colorsDark.${key}`} value={c.colorsDark?.[key] ?? ''}
+                  placeholder="—" pattern="#[0-9a-fA-F]{6}" class="mono" data-light={c.colors[key]} />
+                <span class="swatch" style={c.colorsDark?.[key] ? `background:${c.colorsDark[key]}` : ''} />
+              </span>
+            </label>
+          ))}
+        </div>
+        <script is:inline>
+          // Derive a dark starting point from the light palette: keep the hue,
+          // flip the ground. The reds carry over — brand colours don't theme.
+          document.getElementById('derive-dark')?.addEventListener('click', () => {
+            const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+            const rgbToHex = (r) => '#' + r.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+            const mix = (a, b, t) => rgbToHex(hexToRgb(a).map((v, i) => v + (hexToRgb(b)[i] - v) * t));
+            const grid = document.getElementById('dark-grid');
+            const light = {};
+            grid.querySelectorAll('input').forEach((i) => { light[i.name.split('.')[1]] = i.dataset.light; });
+            const paperD = mix(light.paper, '#0d0f13', 0.9);
+            const inkD = mix(light.paper, '#ffffff', 0.85);
+            const out = {
+              paper: paperD,
+              ink: inkD,
+              mute: mix(inkD, paperD, 0.32),
+              faint: mix(inkD, paperD, 0.55),
+              line: mix(inkD, paperD, 0.84),
+              red: light.red, redField: light.redField, redDeep: light.redDeep, onRed: light.onRed,
+            };
+            grid.querySelectorAll('input').forEach((i) => {
+              const k = i.name.split('.')[1];
+              i.value = out[k] ?? '';
+              const sw = i.parentElement.querySelector('.swatch');
+              if (sw) sw.style.background = i.value;
+            });
+          });
+        </script>
 
         <p class="kicker"><span class="g">/</span>Band &amp; geometry</p>
         <div class="form-grid">
@@ -393,6 +445,10 @@ const previewTitle = (kit.default_title ?? 'Your *Brand* Here').split(/\*([^*]+)
   .color-row { display: flex; gap: 0.4rem; align-items: center; }
   .color-row input { flex: 1; min-width: 0; }
   .swatch { width: 2.1rem; height: 2.1rem; border-radius: var(--radius); border: 1px solid var(--line); flex: none; }
+  .accent-dot {
+    display: inline-block; width: 0.8em; height: 0.8em; border-radius: 3px;
+    vertical-align: -0.08em; border: 1px solid var(--line);
+  }
   .kit-side { position: sticky; top: 2rem; }
   .mark-box { margin-bottom: 0.8rem; }
   .mark-block { width: 7rem; aspect-ratio: 1; display: grid; place-items: center; }

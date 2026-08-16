@@ -27,6 +27,8 @@ export interface DesignInputs {
   collectionId?: string;
   /** Finish-pass preset slug (src/effects.ts); undefined = none. */
   effect?: string;
+  /** 'dark' renders with the kit's colorsDark overlaid; default 'light'. */
+  theme?: 'light' | 'dark';
   /** Panels in order: art R2 keys with labels, each tied to a take id. */
   panels: { takeId: string; artKey: string; label?: string }[];
 }
@@ -64,6 +66,7 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
     brand: JSON.parse(kit.config),
     markKey: kit.mark_key ?? undefined,
     effect: o.effect,
+    theme: o.theme,
     text: { title: o.title, kicker: o.kicker, tagline: o.tagline },
     panels: o.panels.slice(0, needed).map((p) => ({ key: p.artKey, label: p.label })),
   };
@@ -81,8 +84,8 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
   const stmts = [
     env.DB.prepare(
       `INSERT INTO design (id, team_id, project_id, collection_id, layout_id, brand_kit_id, format_id,
-         title, kicker, tagline, r2_key, thumb_key, width, height, created_by, created_at, effect)
-       VALUES (?1, ?2, ?3, ?16, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?17)`,
+         title, kicker, tagline, r2_key, thumb_key, width, height, created_by, created_at, effect, theme)
+       VALUES (?1, ?2, ?3, ?16, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?17, ?18)`,
     ).bind(
       designId,
       o.teamId,
@@ -101,6 +104,7 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
       nowIso,
       o.collectionId ?? null,
       o.effect ?? null,
+      o.theme ?? 'light',
     ),
     ...o.panels.slice(0, needed).map((p, i) =>
       env.DB.prepare(
@@ -166,6 +170,7 @@ export async function createCollection(
     brand: JSON.parse(kit.config),
     markKey: kit.mark_key ?? undefined,
     effect: o.effect,
+    theme: o.theme,
     text: { title: o.title, kicker: o.kicker, tagline: o.tagline },
     panels: o.panels.slice(0, needed).map((p) => ({ key: p.artKey, label: p.label })),
   };
@@ -189,13 +194,13 @@ export async function createCollection(
     stmts.push(
       env.DB.prepare(
         `INSERT INTO design (id, team_id, project_id, collection_id, layout_id, brand_kit_id, format_id,
-           title, kicker, tagline, r2_key, thumb_key, width, height, created_by, created_at, effect)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)`,
+           title, kicker, tagline, r2_key, thumb_key, width, height, created_by, created_at, effect, theme)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
       ).bind(
         item.designId, o.teamId, o.projectId, o.collectionId, o.layoutId, o.brandKitId,
         item.format.id, o.title ?? null, o.kicker ?? null, o.tagline ?? null,
         item.out.outKey, item.out.thumbKey, item.format.width, item.format.height,
-        o.userId, nowIso, o.effect ?? null,
+        o.userId, nowIso, o.effect ?? null, o.theme ?? 'light',
       ),
       ...o.panels.slice(0, needed).map((pnl, i) =>
         env.DB.prepare(

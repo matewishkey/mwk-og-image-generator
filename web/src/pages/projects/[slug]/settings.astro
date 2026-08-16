@@ -71,6 +71,7 @@ if (Astro.request.method === 'POST') {
 const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
 const chosenStyles = new Set(bundle.styles.map((s) => s.id));
 const proofThumb = await proofThumbs(env, team.id);
+const sceneThumb = await proofThumbs(env, team.id, 'scene');
 ---
 
 <Base title={`${bundle.project.name} · settings`} nav="projects" project={{ slug, name: bundle.project.name, active: 'settings' }}>
@@ -102,12 +103,46 @@ const proofThumb = await proofThumbs(env, team.id);
               <b>{s.name}</b>
               {s.team_kind === 'house' && <em class="chip">house</em>}
               {s.id === bundle.project.default_style_id && <em class="chip primary-chip">primary</em>}
+              {(proofThumb.has(s.id) || sceneThumb.has(s.id)) && (
+                <button type="button" class="linkish style-preview-btn" data-name={s.name}
+                  data-desc={s.description} data-face={proofThumb.get(s.id) ?? ''} data-scene={sceneThumb.get(s.id) ?? ''}>
+                  preview
+                </button>
+              )}
             </span>
             <span class="style-desc">{s.description}</span>
           </label>
         ))}
       </div>
     </fieldset>
+    <dialog id="style-preview" class="style-dialog">
+      <div class="style-dialog-body">
+        <header><b id="sp-name"></b><button type="button" class="linkish" id="sp-close">✕ close</button></header>
+        <div class="sp-imgs"><img id="sp-face" alt="face proof" /><img id="sp-scene" alt="scene proof" /></div>
+        <p class="style-desc" id="sp-desc"></p>
+      </div>
+    </dialog>
+    <script is:inline>
+      (() => {
+        const d = document.getElementById('style-preview');
+        document.querySelectorAll('.style-preview-btn').forEach((b) =>
+          b.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            document.getElementById('sp-name').textContent = b.dataset.name;
+            document.getElementById('sp-desc').textContent = b.dataset.desc;
+            for (const [id, key] of [['sp-face', b.dataset.face], ['sp-scene', b.dataset.scene]]) {
+              const img = document.getElementById(id);
+              img.style.display = key ? '' : 'none';
+              if (key) img.src = `/img/${key}`;
+            }
+            d.showModal();
+          }),
+        );
+        document.getElementById('sp-close').addEventListener('click', () => d.close());
+        d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+      })();
+    </script>
     <fieldset class="field">
       <span>Models</span>
       <div class="model-grid">
@@ -156,7 +191,7 @@ const proofThumb = await proofThumbs(env, team.id);
       );
     </script>
     <div class="form-grid">
-      <label class="field"><span>Band title — *word* renders red</span>
+      <label class="field"><span>Band title — *word* renders in the kit's accent colour</span>
         <input type="text" name="title" value={bundle.project.title ?? ''} /></label>
       <label class="field"><span>Kicker</span>
         <input type="text" name="kicker" value={bundle.project.kicker ?? ''} /></label>
@@ -195,6 +230,16 @@ const proofThumb = await proofThumbs(env, team.id);
     padding: 0.15rem 0.45rem; font-style: normal;
   }
   .primary-chip { color: var(--accent); border-color: var(--accent); }
+  .style-preview-btn { font-size: 0.68rem; letter-spacing: 0.04em; }
+  .style-dialog {
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 0;
+    background: var(--surface); color: var(--ink); max-width: min(94vw, 58rem); width: 100%;
+  }
+  .style-dialog::backdrop { background: rgb(0 0 0 / 0.55); }
+  .style-dialog-body { padding: 1rem 1.2rem 1.2rem; }
+  .style-dialog header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.8rem; }
+  .sp-imgs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+  .sp-imgs img { width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--line); }
 
   .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 0.5rem; }
   .model-grid > * { min-width: 0; }

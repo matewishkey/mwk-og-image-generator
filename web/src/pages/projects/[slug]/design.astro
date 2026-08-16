@@ -59,6 +59,19 @@ const bandFracOf = (config?: string): number | undefined => {
     return undefined;
   }
 };
+// The kit drives the emphasis colour and whether a dark render differs at all.
+const kitParsed = (() => {
+  try {
+    return JSON.parse(kitConfig?.config ?? '') as {
+      colors?: { redDeep?: string };
+      colorsDark?: Record<string, string>;
+    };
+  } catch {
+    return {};
+  }
+})();
+const accentHex = kitParsed.colors?.redDeep ?? '#f0524a';
+const kitHasDark = !!kitParsed.colorsDark && Object.keys(kitParsed.colorsDark).length > 0;
 
 const usable = layouts.results.filter((l) => {
   const cfg = LayoutConfigSchema.safeParse(JSON.parse(l.config));
@@ -256,6 +269,9 @@ if (Astro.request.method === 'POST') {
     const chosen = form.getAll('formats').map(String);
     const chosenFormats = formats.results.filter((f) => chosen.includes(f.id));
     if (!chosenFormats.length) throw new Error('Pick at least one format.');
+    const themes = (form.getAll('theme').map(String).filter((t) => t === 'light' || t === 'dark') as
+      ('light' | 'dark')[]);
+    if (!themes.length) themes.push('light');
     const effectChoice = String(form.get('effect') ?? '');
     const text = {
       title: String(form.get('title') ?? '').trim() || undefined,
@@ -276,27 +292,23 @@ if (Astro.request.method === 'POST') {
         label: p.label ?? undefined,
       })),
     };
-    if (chosenFormats.length > 1) {
-      // Several formats at once: a Collection, still one engine call.
-      const collectionId = ulid();
-      await env.DB.prepare(
-        `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-      )
-        .bind(collectionId, team.id, bundle.project.id,
-              usable.find((l) => l.id === base.layoutId)?.name ?? null,
-              user.id, new Date().toISOString())
-        .run();
-      const { rendered, failed } = await createCollection(env, {
-        ...base,
-        collectionId,
-        formats: chosenFormats,
-      });
-      return Astro.redirect(
-        `/projects/${slug}/design${failed ? `?gen=${rendered}+of+${rendered + failed}+rendered` : ''}`,
-      );
+    for (const theme of themes) {
+      if (chosenFormats.length > 1) {
+        // Several formats at once: a Collection, still one engine call per theme.
+        const collectionId = ulid();
+        await env.DB.prepare(
+          `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+        )
+          .bind(collectionId, team.id, bundle.project.id,
+                usable.find((l) => l.id === base.layoutId)?.name ?? null,
+                user.id, new Date().toISOString())
+          .run();
+        await createCollection(env, { ...base, theme, collectionId, formats: chosenFormats });
+      } else {
+        await createDesign(env, { ...base, theme, formatId: chosenFormats[0]!.id });
+      }
     }
-    await createDesign(env, { ...base, formatId: chosenFormats[0]!.id });
     return Astro.redirect(`/projects/${slug}/design`);
   } catch (e) {
     error = (e as Error).message;
@@ -305,7 +317,8 @@ if (Astro.request.method === 'POST') {
 
 const designs = await env.DB.prepare(
   `SELECT d.id, d.collection_id, d.title, d.tagline, d.kicker, d.r2_key, d.thumb_key, d.width, d.height, d.created_at,
-          d.effect, l.name AS layout_name, l.team_id AS layout_team_id, f.name AS format_name, f.slug AS format_slug
+          d.effect, d.theme, l.name AS layout_name, l.team_id AS layout_team_id, l.id AS layout_id,
+          f.name AS format_name, f.slug AS format_slug
      FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
     WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
     ORDER BY d.created_at DESC`,
@@ -323,8 +336,10 @@ const designs = await env.DB.prepare(
     height: number;
     created_at: string;
     effect: string | null;
+    theme: string;
     layout_name: string;
     layout_team_id: string;
+    layout_id: string;
     format_name: string;
     format_slug: string;
   }>();
@@ -334,6 +349,19 @@ const leadId = Astro.url.searchParams.get('lead');
 const lead: DesignRow | undefined =
   designs.results.find((d) => d.id === leadId) ?? designs.results[0];
 const versions = designs.results.filter((d) => d.id !== lead?.id);
+
+// The lead's panels, for "download the raw picture without the design".
+const leadPanels = lead
+  ? (
+      await env.DB.prepare(
+        `SELECT p.position, p.label, t.art_key FROM design_panel p
+           JOIN take t ON t.id = p.take_id
+          WHERE p.design_id = ?1 ORDER BY p.position`,
+      )
+        .bind(lead.id)
+        .all<{ position: number; label: string | null; art_key: string | null }>()
+    ).results.filter((p) => p.art_key)
+  : [];
 ---
 
 <Base title={`${bundle.project.name} · design`} nav="projects" project={{ slug, name: bundle.project.name, active: 'design' }}>
@@ -378,7 +406,10 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
           </a>
           <figcaption>
             <b>{lead.layout_name}</b>
-            <span class="mono faint">{lead.format_slug} · {lead.width}×{lead.height}{lead.effect ? ` · ${lead.effect}` : ''}</span>
+            <span class="mono faint">
+              {lead.format_slug} · {lead.width}×{lead.height}{lead.effect ? ` · ${lead.effect}` : ''}
+              {lead.theme === 'dark' ? ' · dark' : ''}
+            </span>
             <span class="lead-actions">
               <form method="post">
                 <input type="hidden" name="action" value="all-formats" />
@@ -386,7 +417,13 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
                 <button class="btn small" type="submit" data-running="Rendering…"><Icon name="run" />All {formats.results.length} formats · $0.00</button>
               </form>
               <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}><Icon name="watch" />Preview</a>
+              <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${lead.layout_id}&design=${lead.id}`}><Icon name="edit" />Open in editor</a>
               <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}><Icon name="download" />Download</a>
+              {leadPanels.map((p) => (
+                <a class="btn small ghost" href={`/img/${p.art_key}`} download={`${slug}-${p.label ?? `panel-${p.position}`}-raw.png`}>
+                  <Icon name="download" />Raw {leadPanels.length > 1 ? p.label ?? p.position : 'picture'}
+                </a>
+              ))}
             </span>
             {lead.layout_team_id === team.id && (
               <form method="post" class="save-template">
@@ -450,8 +487,14 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
             document.querySelectorAll('.fmt-grid input[type=checkbox]').forEach((c) => (c.checked = true));
           });
         </script>
+        <fieldset class="field">
+          <span>Theme — dark uses the kit's dark palette{kitHasDark ? '' : ' (this kit has none yet — dark renders identical; add one in the kit editor)'}</span>
+          <label class="inline-check"><input type="checkbox" name="theme" value="light" checked /> light</label>
+          <label class="inline-check"><input type="checkbox" name="theme" value="dark" /> dark</label>
+        </fieldset>
         <div class="form-grid">
-          <label class="field"><span>Title — *word* renders red</span>
+          <label class="field">
+            <span>Title — *word* renders in the kit's accent <i class="accent-swatch" style={`background:${accentHex}`} title={accentHex}></i></span>
             <input type="text" name="title" value={bundle.project.title ?? ''} /></label>
           <label class="field"><span>Kicker (label above) — usually not with a tagline</span>
             <input type="text" name="kicker" value={bundle.project.kicker ?? ''} /></label>
@@ -470,8 +513,8 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
         <p class="inventory mono">Or let the model propose arrangements — it writes configs, the renderer draws them.</p>
         <div class="form-grid">
           <label class="field">
-            <span>Direction (optional)</span>
-            <input type="text" name="brief" placeholder="e.g. make the launch the hero, keep it calm" />
+            <span>Direction (optional) — <button type="button" class="linkish" id="brief-minimal">minimal</button> fills a quiet brief</span>
+            <input type="text" name="brief" id="brief-input" placeholder="e.g. make the launch the hero, keep it calm" />
           </label>
           <label class="field" style="max-width:10rem">
             <span>How many</span>
@@ -492,6 +535,13 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
           </label>
         </div>
         <button class="btn ghost" type="submit" data-running="Designing — twenty seconds or so…"><Icon name="template" />Generate layouts · under a cent</button>
+        <script is:inline>
+          document.getElementById('brief-minimal')?.addEventListener('click', () => {
+            const b = document.getElementById('brief-input');
+            b.value = 'minimal and quiet: one image or two at most, generous empty space, no shapes, at most one small text layer';
+            b.focus();
+          });
+        </script>
       </form>
     )
   }
@@ -503,7 +553,8 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
         <p class="inventory mono">
           Or author a template as raw JSON — full control: cells, texts, shapes, tokens.
           The <a href="/glossary">glossary</a> names the vocabulary; colors are always brand
-          tokens (paper, ink, red, redDeep…), never hex.
+          tokens (paper, ink, red, redDeep — the accent…), never hex.
+          Prefer knobs and a live preview? <a href={`/projects/${slug}/design/editor`}>Open the editor</a>.
         </p>
         <label class="field"><span>Template config (JSON)</span>
           <textarea name="config" class="mono author-json" required
@@ -538,8 +589,8 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
               </a>
               <figcaption>
                 <span>{d.layout_name}</span>
-                <span class="mono faint">{d.format_slug}</span>
-                <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`}>↓</a>
+                <span class="mono faint">{d.format_slug}{d.theme === 'dark' ? ' · dark' : ''}</span>
+                <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`} title="Download"><Icon name="download" />PNG</a>
               </figcaption>
             </figure>
           ))}
@@ -574,6 +625,11 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
   .select-all { font-size: 0.68rem; letter-spacing: 0; text-transform: none; }
   .author-json { min-height: 8rem; font-size: 0.82rem; }
   fieldset { border: 0; }
+  .inline-check { display: inline-flex; gap: 0.4rem; align-items: center; margin-right: 1.2rem; color: var(--mute); font-size: 0.9rem; }
+  .accent-swatch {
+    display: inline-block; width: 0.85em; height: 0.85em; border-radius: 3px;
+    vertical-align: -0.1em; border: 1px solid var(--line);
+  }
   .versions .kicker { margin-bottom: 0.8rem; }
   .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.9rem; }
   .designs-grid > * { min-width: 0; }

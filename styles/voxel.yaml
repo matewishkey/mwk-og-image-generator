@@ -1,0 +1,16 @@
+name: Voxel
+description: >-
+  Chunky 3D cubes with soft global light — pixel art's 3D sibling. Playful tech charm.
+look: >-
+  Voxel 3D render: everything built from uniform small cubes, like a scene assembled from
+  tiny blocks, with clean 45-degree lighting and soft global illumination shading each
+  cube face distinctly. Saturated toy-like palette, crisp cube edges, a soft ambient
+  shadow grounding the scene on a plain pastel field. Detail emerges from clever block
+  placement, never from texture; the render itself is immaculate.
+subject: >-
+  A voxel figure at readable scale — blocky proportions, hair and outfit as coloured cube
+  clusters, a few well-placed cubes for the face.
+avoid: >-
+  smooth curves, texture maps, outlines, mixed cube sizes, photorealism
+tags: [voxel, 3d, blocks, playful]
+origin: hand
