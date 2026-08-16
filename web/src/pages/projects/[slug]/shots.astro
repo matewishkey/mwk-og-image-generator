@@ -385,8 +385,12 @@ const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_k
   document.querySelectorAll('.style-strip-form input[type=radio]').forEach((r) =>
     r.addEventListener('change', () => r.form.requestSubmit()),
   );
-  // Fresh co-write suggestions land mid-page — bring them into view.
-  document.getElementById('suggestions')?.scrollIntoView({ block: 'center' });
+  // Fresh co-write suggestions land mid-page — bring them into view. Re-run
+  // just after load: same-URL POSTs get the browser's scroll restored AFTER
+  // parse, which would silently undo the first scroll.
+  const showSuggestions = () => document.getElementById('suggestions')?.scrollIntoView({ block: 'center' });
+  showSuggestions();
+  addEventListener('load', () => setTimeout(showSuggestions, 60));
 </script>
 
 <style>
