@@ -17,9 +17,13 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
   projects                     list the team's projects
   create -n <name> -s <style>  new project; -m models (default zturbo,pimage), -i iterations, -d description
   show <slug>                  project detail: settings + shots with ids
-  add-shot <slug> -p <prompt>  add shot(s); repeat -p; --label names the first
-  edit-shot <slug> <shotId>    change a shot; -p prompt, --label label
-  delete-shot <slug> <shotId>  soft-delete a shot
+  add-shot <slug> -p <prompt>  add shot(s); repeat -p; --label names the first; --style overrides
+  edit-shot <slug> <shot>      change a shot; -p prompt, --label label (shot = id, position or label)
+  set-style <slug> <shot> [style]   per-shot style override; omit style to clear
+  reshoot <slug> <shot>        new takes of one shot with current settings; --watch
+  delete-shot <slug> <shot>    soft-delete a shot
+  refs                         the media library, with names
+  name-ref <refId> <name>      name an image so we can talk about it
   run <slug>                   start a full run (project settings pick models); --watch to follow
   watch <slug>                 follow take status until the run settles; --interval <s> (default 5)
   takes <slug>                 the contact sheet as a table; --all includes hidden + superseded
@@ -183,18 +187,31 @@ async function cmdAddShot(slug: string, argv: string[]): Promise<void> {
     options: {
       prompt: { type: 'string', short: 'p', multiple: true },
       label: { type: 'string' },
+      style: { type: 'string' },
     },
   });
   const prompts = values.prompt ?? [];
   if (!prompts.length) fail('-p <prompt> is required (repeat for several)');
   for (const [i, prompt] of prompts.entries()) {
-    const r = await api<{ shotId: string; position: number }>(`/projects/${slug}/shots`, {
+    const r = await api<{ shotId: string; position: number; label: string }>(`/projects/${slug}/shots`, {
       method: 'POST',
-      body: { action: 'add', prompt, label: i === 0 ? values.label : undefined },
+      body: { action: 'add', prompt, label: i === 0 ? values.label : undefined, style: values.style },
     });
-    console.log(`✓ shot ${r.position} added (${r.shotId})`);
+    console.log(`✓ "${r.label}" added (${r.shotId})`);
   }
   console.log(studioUrl(`/projects/${slug}/shots`));
+}
+
+async function cmdRefs(): Promise<void> {
+  const { references } = await api<{
+    references: { id: string; name: string | null; filename: string; width: number | null; height: number | null; uses: number }[];
+  }>('/media');
+  for (const r of references) {
+    console.log(
+      `${r.id}  ${(r.name ?? `(${r.filename})`).padEnd(28)} ${r.width}×${r.height}  ${r.uses} use${r.uses === 1 ? '' : 's'}`,
+    );
+  }
+  if (!references.length) console.log('(library is empty)');
 }
 
 async function cmdEditShot(slug: string, shotId: string, argv: string[]): Promise<void> {
@@ -333,6 +350,40 @@ export async function runStudio(argv: string[]): Promise<void> {
       const shot = rest[1];
       if (!shot) fail('the shot id is required');
       await cmdDeleteShot(slug, shot);
+      break;
+    }
+    case 'set-style': {
+      const slug = needSlug();
+      const shot = rest[1];
+      if (!shot) fail('the shot (id, position or label) is required');
+      const r = await api<{ ok: true; styleId: string | null }>(`/projects/${slug}/shots`, {
+        method: 'POST',
+        body: { action: 'set-style', shot, style: rest[2] ?? '' },
+      });
+      console.log(r.styleId ? `✓ shot renders in its own style` : `✓ back to the project style`);
+      console.log(studioUrl(`/projects/${slug}/shots`));
+      break;
+    }
+    case 'reshoot': {
+      const slug = needSlug();
+      const shot = rest[1];
+      if (!shot) fail('the shot (id, position or label) is required');
+      const { values } = parseArgs({ args: rest.slice(2), options: { watch: { type: 'boolean' } } });
+      const r = await api<{ runId: string; url: string }>(`/projects/${slug}/shots`, {
+        method: 'POST',
+        body: { action: 'reshoot', shot },
+      });
+      console.log(`✓ re-shoot started (run ${r.runId})`);
+      console.log(studioUrl(r.url));
+      if (values.watch) await watch(slug, 5);
+      break;
+    }
+    case 'refs': await cmdRefs(); break;
+    case 'name-ref': {
+      const ref = rest[0];
+      if (!ref) fail('usage: mwk-og studio name-ref <refId> <name>');
+      await api('/media', { method: 'POST', body: { action: 'rename', ref, name: rest.slice(1).join(' ') } });
+      console.log('✓ named');
       break;
     }
     case 'run': await cmdRun(needSlug(), rest.slice(1)); break;

@@ -6,6 +6,8 @@ import { createCollection, createDesign } from '../../../lib/design';
 import { ARCHETYPE_PANELS, LayoutConfigSchema } from '../../../../../src/seam.ts';
 import { generateLayouts } from '../../../lib/generate';
 import { ulid } from '../../../lib/ulid';
+import { EFFECTS, isEffect } from '../../../../../src/effects.ts';
+import { slugify } from '../../../../../src/style.ts';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -122,7 +124,8 @@ if (Astro.request.method === 'POST') {
         n,
       );
       const nowIso = new Date().toISOString();
-      let rendered = 0;
+      // Persist every generated layout first (fast D1 writes)...
+      const inserted: string[] = [];
       for (const g of generated) {
         const layoutId = ulid();
         await env.DB.prepare(
@@ -132,35 +135,68 @@ if (Astro.request.method === 'POST') {
           .bind(layoutId, team.id, `gen-${layoutId.slice(-8).toLowerCase()}`, g.name,
                 JSON.stringify(g.config), brief || null, nowIso)
           .run();
-        try {
-          await createDesign(env, {
-            teamId: team.id,
-            userId: user.id,
-            projectId: bundle.project.id,
-            layoutId,
-            formatId: format.id,
-            brandKitId: bundle.project.brand_kit_id,
-            title: bundle.project.title ?? undefined,
-            kicker: bundle.project.kicker ?? undefined,
-            tagline: bundle.project.tagline ?? undefined,
-            panels: picks.results.map((pk) => ({
-              takeId: pk.take_id,
-              artKey: pk.art_key,
-              label: pk.label ?? undefined,
-            })),
-          });
-          rendered++;
-        } catch {
-          /* a config the renderer rejects is dropped, not shown */
-        }
+        inserted.push(layoutId);
       }
+      // ...then render them ~4 wide instead of one engine round-trip at a time.
+      let rendered = 0;
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(4, inserted.length) }, async () => {
+          while (next < inserted.length) {
+            const layoutId = inserted[next++]!;
+            try {
+              await createDesign(env, {
+                teamId: team.id,
+                userId: user.id,
+                projectId: bundle.project.id,
+                layoutId,
+                formatId: format.id,
+                brandKitId: bundle.project.brand_kit_id,
+                title: bundle.project.title ?? undefined,
+                kicker: bundle.project.kicker ?? undefined,
+                tagline: bundle.project.tagline ?? undefined,
+                panels: picks.results.map((pk) => ({
+                  takeId: pk.take_id,
+                  artKey: pk.art_key,
+                  label: pk.label ?? undefined,
+                })),
+              });
+              rendered++;
+            } catch {
+              /* a config the renderer rejects is dropped, not shown */
+            }
+          }
+        }),
+      );
       return Astro.redirect(`/projects/${slug}/design?gen=${rendered}+rendered,+${dropped + (generated.length - rendered)}+dropped`);
     } catch (e) {
       error = (e as Error).message;
     }
+  } else if (action === 'save-template') {
+    // Promote a generated layout: give it a real name so it reads like a template
+    // in the picker. House layouts are not renameable — team_id in the WHERE.
+    const src = await env.DB.prepare(
+      `SELECT layout_id FROM design WHERE id = ?1 AND team_id = ?2 AND project_id = ?3`,
+    )
+      .bind(String(form.get('design') ?? ''), team.id, bundle.project.id)
+      .first<{ layout_id: string }>();
+    const name = String(form.get('name') ?? '').trim();
+    if (src && name) {
+      const r = await env.DB.prepare(
+        `UPDATE layout SET name = ?1, slug = ?2, updated_at = ?3 WHERE id = ?4 AND team_id = ?5`,
+      )
+        .bind(name, slugify(name) || `tpl-${src.layout_id.slice(-8).toLowerCase()}`,
+              new Date().toISOString(), src.layout_id, team.id)
+        .run();
+      if (r.meta.changes === 0) error = 'Only generated (team) layouts can be saved as templates.';
+      else return Astro.redirect(`/projects/${slug}/design?gen=template+saved`);
+    } else error = 'A template needs a name.';
   } else
   try {
-    const formatChoice = String(form.get('format') ?? '');
+    const chosen = form.getAll('formats').map(String);
+    const chosenFormats = formats.results.filter((f) => chosen.includes(f.id));
+    if (!chosenFormats.length) throw new Error('Pick at least one format.');
+    const effectChoice = String(form.get('effect') ?? '');
     const text = {
       title: String(form.get('title') ?? '').trim() || undefined,
       kicker: String(form.get('kicker') ?? '').trim() || undefined,
@@ -172,6 +208,7 @@ if (Astro.request.method === 'POST') {
       projectId: bundle.project.id,
       layoutId: String(form.get('layout') ?? ''),
       brandKitId: bundle.project.brand_kit_id,
+      effect: isEffect(effectChoice) ? effectChoice : undefined,
       ...text,
       panels: picks.results.map((p) => ({
         takeId: p.take_id,
@@ -179,9 +216,8 @@ if (Astro.request.method === 'POST') {
         label: p.label ?? undefined,
       })),
     };
-    if (formatChoice === 'all') {
-      // One design across every format: a Collection. Renders are $0.00, so the
-      // answer to "which format?" is "all of them" — download the ones you need.
+    if (chosenFormats.length > 1) {
+      // Several formats at once: a Collection, still one engine call.
       const collectionId = ulid();
       await env.DB.prepare(
         `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)
@@ -194,13 +230,13 @@ if (Astro.request.method === 'POST') {
       const { rendered, failed } = await createCollection(env, {
         ...base,
         collectionId,
-        formats: formats.results,
+        formats: chosenFormats,
       });
       return Astro.redirect(
         `/projects/${slug}/design${failed ? `?gen=${rendered}+of+${rendered + failed}+rendered` : ''}`,
       );
     }
-    await createDesign(env, { ...base, formatId: formatChoice });
+    await createDesign(env, { ...base, formatId: chosenFormats[0]!.id });
     return Astro.redirect(`/projects/${slug}/design`);
   } catch (e) {
     error = (e as Error).message;
@@ -209,7 +245,7 @@ if (Astro.request.method === 'POST') {
 
 const designs = await env.DB.prepare(
   `SELECT d.id, d.collection_id, d.title, d.tagline, d.kicker, d.r2_key, d.thumb_key, d.width, d.height, d.created_at,
-          l.name AS layout_name, f.name AS format_name, f.slug AS format_slug
+          d.effect, l.name AS layout_name, l.team_id AS layout_team_id, f.name AS format_name, f.slug AS format_slug
      FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
     WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
     ORDER BY d.created_at DESC`,
@@ -226,7 +262,9 @@ const designs = await env.DB.prepare(
     width: number;
     height: number;
     created_at: string;
+    effect: string | null;
     layout_name: string;
+    layout_team_id: string;
     format_name: string;
     format_slug: string;
   }>();
@@ -280,7 +318,7 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
           </a>
           <figcaption>
             <b>{lead.layout_name}</b>
-            <span class="mono faint">{lead.format_slug} · {lead.width}×{lead.height}</span>
+            <span class="mono faint">{lead.format_slug} · {lead.width}×{lead.height}{lead.effect ? ` · ${lead.effect}` : ''}</span>
             <span class="lead-actions">
               <form method="post">
                 <input type="hidden" name="action" value="all-formats" />
@@ -290,6 +328,14 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
               <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}>Preview</a>
               <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}>Download</a>
             </span>
+            {lead.layout_team_id === team.id && (
+              <form method="post" class="save-template">
+                <input type="hidden" name="action" value="save-template" />
+                <input type="hidden" name="design" value={lead.id} />
+                <input type="text" name="name" placeholder="save this layout as a template…" />
+                <button class="btn small ghost" type="submit">Save</button>
+              </form>
+            )}
           </figcaption>
         </figure>
       </section>
@@ -318,15 +364,32 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
             </select>
           </label>
           <label class="field">
-            <span>Format</span>
-            <select name="format" required>
-              <option value="all" selected>Every format — one collection, {formats.results.length} designs</option>
-              {formats.results.map((f) => (
-                <option value={f.id}>{f.name} · {f.width}×{f.height}</option>
+            <span>Finish — a deterministic pass over the final card, never an AI re-render</span>
+            <select name="effect">
+              <option value="" selected>None — the card as composited</option>
+              {EFFECTS.map((e) => (
+                <option value={e.slug}>{e.label} — {e.blurb}</option>
               ))}
             </select>
           </label>
         </div>
+        <fieldset class="field">
+          <span>Formats — the OG card first; tick more when you need them <button type="button" class="linkish select-all" id="fmt-all">(select all)</button></span>
+          <div class="fmt-grid">
+            {formats.results.map((f) => (
+              <label class="fmt-pick">
+                <input type="checkbox" name="formats" value={f.id} checked={f.slug === 'og'} />
+                <span>{f.name}</span>
+                <span class="mono faint">{f.width}×{f.height}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <script is:inline>
+          document.getElementById('fmt-all')?.addEventListener('click', () => {
+            document.querySelectorAll('.fmt-grid input[type=checkbox]').forEach((c) => (c.checked = true));
+          });
+        </script>
         <div class="form-grid">
           <label class="field"><span>Title — *word* renders red</span>
             <input type="text" name="title" value={bundle.project.title ?? ''} /></label>
@@ -335,7 +398,7 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
           <label class="field"><span>Tagline (sentence below)</span>
             <input type="text" name="tagline" value={bundle.project.tagline ?? ''} /></label>
         </div>
-        <button class="btn" type="submit">Render design · $0.00</button>
+        <button class="btn" type="submit">Render · $0.00</button>
       </form>
     )
   }
@@ -408,6 +471,18 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
   .lead-card img { display: block; width: 100%; height: auto; }
   .lead-card figcaption { display: flex; align-items: center; gap: 0.9rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
   .lead-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
+  .save-template { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.3rem; }
+  .save-template input[type=text] { font-size: 0.82rem; padding: 0.35rem 0.55rem; max-width: 22rem; }
+  .fmt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.4rem; }
+  .fmt-grid > * { min-width: 0; }
+  .fmt-pick {
+    display: flex; align-items: center; gap: 0.5rem;
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 0.4rem 0.6rem; cursor: pointer; font-size: 0.85rem;
+  }
+  .fmt-pick:has(input:checked) { border-color: var(--accent); }
+  .select-all { font-size: 0.68rem; letter-spacing: 0; text-transform: none; }
+  fieldset { border: 0; }
   .versions .kicker { margin-bottom: 0.8rem; }
   .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.9rem; }
   .designs-grid > * { min-width: 0; }

@@ -104,8 +104,9 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
 - **Generate-first, never config-first.** Twenty rendered options beat one form.
   Fine-tune panels exist for the tenth time, not the first.
 - **Design tab shape**: one leading image with its actions, all versions in a grid
-  under it, click a version to lead. "Every format" (a collection) is the default
-  render, not a choice.
+  under it, click a version to lead. Rendering defaults to the OG card only, with a
+  format checkbox list for more ("every format" is one click, not the default —
+  mate revised his earlier all-formats-default rule on 2026-08-16).
 - Every screen keeps a pasteable URL; filters live in the query string.
 
 ## The studio CLI — how Claude drives the site

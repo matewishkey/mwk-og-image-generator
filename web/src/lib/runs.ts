@@ -44,6 +44,8 @@ export interface ShotRow {
   position: number;
   label: string | null;
   prompt: string;
+  /** NULL = the project's default style. */
+  style_override_id: string | null;
 }
 
 export function toStyle(row: StyleRow): Style {
@@ -123,6 +125,14 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
   const refs = await loadProjectRefs(env, o.project.id);
   const hasRefs = refs.keys.length > 0;
 
+  // Per-shot style overrides: fetch the overriding rows once, keyed by id.
+  const overrideIds = [...new Set(o.shots.map((s) => s.style_override_id).filter(Boolean))] as string[];
+  const overrides = new Map<string, StyleRow>();
+  for (const id of overrideIds) {
+    const row = await env.DB.prepare(`SELECT * FROM style WHERE id = ?1`).bind(id).first<StyleRow>();
+    if (row) overrides.set(id, row);
+  }
+
   const estimated = estimateMicros(
     o.models,
     o.project.tier,
@@ -142,15 +152,20 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
   let firstTakeId: string | null = null;
 
   for (const shot of o.shots) {
+    const overrideRow = shot.style_override_id ? overrides.get(shot.style_override_id) : undefined;
+    const shotStyleRow = overrideRow ?? o.style;
+    const shotStyle = overrideRow ? toStyle(overrideRow) : style;
+    // The take row records the composed prompt; the seam carries the RAW idea
+    // (plus the override style) and the engine composes the identical string.
     const prompt = compose({
-      style,
+      style: shotStyle,
       idea: shot.prompt,
       hasRefs,
       refRole: o.project.ref_role ?? undefined,
       allowText: o.project.allow_text === 1,
       extra: o.project.extra ?? undefined,
     });
-    ideas.push({ shotId: shot.id, prompt });
+    ideas.push({ shotId: shot.id, prompt: shot.prompt, style: overrideRow ? shotStyle : undefined });
 
     for (const alias of o.models) {
       const spec = resolveModel(alias);
@@ -170,7 +185,7 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
             runId,
             shot.id,
             o.teamId,
-            o.style.id,
+            shotStyleRow.id,
             spec.alias,
             spec.id,
             tier,

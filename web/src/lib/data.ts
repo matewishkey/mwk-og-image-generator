@@ -23,7 +23,7 @@ export async function loadProject(
       .bind(project.default_style_id)
       .first<StyleRow>(),
     env.DB.prepare(
-      `SELECT id, position, label, prompt, picked_take_id
+      `SELECT id, position, label, prompt, picked_take_id, style_override_id
          FROM shot WHERE project_id = ?1 AND deleted_at IS NULL ORDER BY position`,
     )
       .bind(project.id)

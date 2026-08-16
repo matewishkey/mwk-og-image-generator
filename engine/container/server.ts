@@ -27,6 +27,7 @@ import {
 import { runText } from '../../src/replicate.ts';
 import { loadBrand, type BrandConfig } from '../../src/brand.ts';
 import { renderDesign } from './layout.ts';
+import { applyEffect } from './effects.ts';
 
 const PORT = 8080;
 
@@ -100,9 +101,12 @@ async function executeRun(req: EngineRunRequest, refBytes: Buffer[]): Promise<vo
     }
 
     const models = req.models.map(resolveModel);
+    // SeamIdea.prompt is the RAW shot idea; runSweep composes it with the style
+    // exactly once. Per-shot style overrides ride along in ideaStyles.
     const ideas = req.ideas.map((i) => i.prompt);
     const opts = {
       ideas,
+      ideaStyles: req.ideas.map((i) => i.style ?? null),
       styles: [req.style],
       models,
       iterations: req.iterations,
@@ -255,7 +259,8 @@ const server = createServer((req, res) => {
           const results = [];
           for (const out of r.outputs) {
             try {
-              const png = await renderDesign(cfg, brand, out.width, out.height, r.text, panels);
+              let png = await renderDesign(cfg, brand, out.width, out.height, r.text, panels);
+              if (r.effect) png = await applyEffect(png, r.effect, out.width, out.height);
               const thumb = await sharp(png).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
               await r2Put(out.outKey, png, 'image/png');
               await r2Put(out.thumbKey, thumb, 'image/webp');
@@ -269,7 +274,8 @@ const server = createServer((req, res) => {
           return;
         }
 
-        const png = await renderDesign(cfg, brand, r.width, r.height, r.text, panels);
+        let png = await renderDesign(cfg, brand, r.width, r.height, r.text, panels);
+        if (r.effect) png = await applyEffect(png, r.effect, r.width, r.height);
         const thumb = await sharp(png).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
         await r2Put(r.outKey, png, 'image/png');
         await r2Put(r.thumbKey, thumb, 'image/webp');

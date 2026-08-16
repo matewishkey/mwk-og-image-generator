@@ -57,6 +57,8 @@ export interface LibraryRef {
   id: string;
   r2_key: string;
   filename: string;
+  /** Friendly, addressable name; falls back to the filename in every display. */
+  name: string | null;
   width: number | null;
   height: number | null;
   created_at: string;
@@ -65,11 +67,24 @@ export interface LibraryRef {
 
 export async function listLibrary(env: Env, teamId: string): Promise<LibraryRef[]> {
   const rows = await env.DB.prepare(
-    `SELECT r.id, r.r2_key, r.filename, r.width, r.height, r.created_at,
+    `SELECT r.id, r.r2_key, r.filename, r.name, r.width, r.height, r.created_at,
             (SELECT count(*) FROM reference_use u WHERE u.reference_id = r.id) AS uses
        FROM reference r WHERE r.team_id = ?1 ORDER BY r.created_at DESC`,
   )
     .bind(teamId)
     .all<LibraryRef>();
   return rows.results;
+}
+
+/** Set (or clear) a reference's friendly name. Team id in the WHERE is the authz. */
+export async function renameReference(
+  env: Env,
+  teamId: string,
+  refId: string,
+  name: string,
+): Promise<boolean> {
+  const r = await env.DB.prepare(`UPDATE reference SET name = ?1 WHERE id = ?2 AND team_id = ?3`)
+    .bind(name.trim() || null, refId, teamId)
+    .run();
+  return r.meta.changes > 0;
 }

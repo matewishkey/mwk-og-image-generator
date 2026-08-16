@@ -280,8 +280,11 @@ function cmdModels(): void {
     const star = DEFAULT_SWEEP.includes(m.alias) ? '*' : ' ';
     console.log(`${star} ${m.alias.padEnd(12)} ${m.id}`);
     console.log(`    ${prices}`);
-    console.log(`    refs: ${m.refStyle === 'single' ? '1 only' : `up to ${m.maxRefs}`}${m.seedable ? ' · seedable' : ''}`);
-    console.log(`    ${m.notes}\n`);
+    console.log(`    refs: ${m.refStyle === 'single' ? '1 only' : `up to ${m.maxRefs}`}${m.seedable ? ' · seedable' : ''}${m.typicalSeconds ? ` · ~${m.typicalSeconds}s/image` : ''}`);
+    console.log(`    ${m.notes}`);
+    if (m.goodFor) console.log(`    + ${m.goodFor}`);
+    if (m.weakFor) console.log(`    - ${m.weakFor}`);
+    console.log('');
   }
   console.log(`* = in the default sweep`);
 }

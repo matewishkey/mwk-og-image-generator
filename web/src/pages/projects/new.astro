@@ -60,25 +60,35 @@ if (Astro.request.method === 'POST') {
       <span>Description</span>
       <input type="text" name="description" placeholder="optional" />
     </label>
-    <label class="field">
-      <span>Style</span>
-      <select name="style" required>
-        {styles.results.map((s) => (
-          <option value={s.id}>
-            {s.name} {s.team_kind === 'house' ? '· house' : ''}
-          </option>
-        ))}
-      </select>
-    </label>
     <fieldset class="field">
-      <span>Models</span>
+      <span>Style — the look every shot renders in (a shot can override it later)</span>
+      <div class="style-grid">
+        {styles.results.map((s) => (
+          <label class="style-pick">
+            <input type="radio" name="style" value={s.id} required />
+            <span class="style-head">
+              <b>{s.name}</b>
+              {s.team_kind === 'house' && <em class="chip">house</em>}
+            </span>
+            <span class="style-desc">{s.description}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+    <fieldset class="field">
+      <span>Models — draft cheap, finish on gpt2</span>
       <div class="model-grid">
         {imageModels.map((m) => (
           <label class="model-pick">
-            <input type="checkbox" name="models" value={m.alias} checked={DEFAULT_CHECKED.has(m.alias)} />
-            <span class="mono">{m.alias}</span>
-            <span class="money">${m.priceUsd[m.tiers[0]!]}</span>
+            <span class="model-row">
+              <input type="checkbox" name="models" value={m.alias} checked={DEFAULT_CHECKED.has(m.alias)} />
+              <span class="mono">{m.alias}</span>
+              <span class="money">${m.priceUsd[m.tiers[0]!]}</span>
+              {m.typicalSeconds && <span class="mono secs">~{m.typicalSeconds}s</span>}
+            </span>
             <span class="model-name">{m.label}</span>
+            {m.goodFor && <span class="model-good">+ {m.goodFor}</span>}
+            {m.weakFor && <span class="model-weak">− {m.weakFor}</span>}
           </label>
         ))}
       </div>
@@ -92,16 +102,40 @@ if (Astro.request.method === 'POST') {
 </Base>
 
 <style>
-  .new-project { max-width: 44rem; }
+  .new-project { max-width: 62rem; }
   fieldset { border: 0; }
-  .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.5rem; }
+
+  .style-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0.5rem; }
+  .style-grid > * { min-width: 0; }
+  .style-pick {
+    display: grid; gap: 0.3rem; align-content: start;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 0.65rem 0.8rem; cursor: pointer;
+  }
+  .style-pick:has(input:checked) { border-color: var(--accent); }
+  .style-pick input { position: absolute; opacity: 0; }
+  .style-head { display: flex; align-items: baseline; gap: 0.5rem; }
+  .style-pick:has(input:checked) .style-head b { color: var(--accent); }
+  .style-desc { color: var(--faint); font-size: 0.8rem; line-height: 1.35; }
+  .chip {
+    font: 700 0.6rem/1 var(--font-label); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--mute); border: 1px solid var(--line); border-radius: 999px;
+    padding: 0.15rem 0.45rem; font-style: normal;
+  }
+
+  .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0.5rem; }
   .model-grid > * { min-width: 0; }
   .model-pick {
-    display: flex; align-items: center; gap: 0.5rem;
+    display: grid; gap: 0.25rem; align-content: start;
     background: var(--surface); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: 0.5rem 0.7rem; cursor: pointer;
+    border-radius: var(--radius); padding: 0.55rem 0.8rem; cursor: pointer;
   }
   .model-pick:has(input:checked) { border-color: var(--accent); }
+  .model-row { display: flex; align-items: center; gap: 0.5rem; }
   .model-pick .mono { font-weight: 700; font-size: 0.85rem; }
-  .model-name { color: var(--faint); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-pick .secs { font-weight: 400; color: var(--faint); font-size: 0.75rem; margin-left: auto; }
+  .model-name { color: var(--faint); font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-good, .model-weak { font-size: 0.78rem; line-height: 1.35; }
+  .model-good { color: var(--mute); }
+  .model-weak { color: var(--faint); }
 </style>

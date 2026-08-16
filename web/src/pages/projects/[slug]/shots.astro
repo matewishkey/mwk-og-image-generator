@@ -6,6 +6,7 @@ import { loadProject } from '../../../lib/data';
 import { createRun, estimateMicros, microsToUsd } from '../../../lib/runs';
 import { suggestShotVariants } from '../../../lib/generate';
 import { loadProjectRefs } from '../../../lib/runs';
+import { MODELS } from '../../../../../src/models.ts';
 import { listLibrary, uploadReferences } from '../../../lib/media';
 
 const env = ENV;
@@ -16,6 +17,14 @@ if (!team) return new Response('No team', { status: 403 });
 const slug = Astro.params.slug!;
 let bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
+
+const styles = await env.DB.prepare(
+  `SELECT s.id, s.name, t.kind AS team_kind FROM style s JOIN team t ON t.id = s.team_id
+    WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
+    ORDER BY t.kind DESC, s.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; name: string; team_kind: string }>();
 
 let error = '';
 let suggestFor = '';
@@ -37,11 +46,42 @@ if (Astro.request.method === 'POST') {
           ulid(),
           bundle.project.id,
           next,
-          String(form.get('label') ?? '').trim() || null,
+          // Every shot gets an addressable name — "Shot 3" beats an id in conversation.
+          String(form.get('label') ?? '').trim() || `Shot ${next}`,
           prompt,
           now,
         )
         .run();
+    }
+  } else if (action === 'set-style') {
+    const shotId = String(form.get('shot') ?? '');
+    const styleId = String(form.get('style') ?? '');
+    const valid = styleId === '' || styles.results.some((s) => s.id === styleId);
+    if (valid && bundle.shots.some((s) => s.id === shotId)) {
+      await env.DB.prepare(
+        `UPDATE shot SET style_override_id=?1, version=version+1, updated_at=?2 WHERE id=?3`,
+      )
+        .bind(styleId || null, now, shotId)
+        .run();
+    }
+  } else if (action === 'reshoot') {
+    const shot = bundle.shots.find((s) => s.id === String(form.get('shot') ?? ''));
+    if (shot) {
+      try {
+        await createRun(env, {
+          teamId: team.id,
+          userId: user.id,
+          project: bundle.project,
+          style: bundle.style,
+          shots: [shot],
+          models: JSON.parse(bundle.project.models),
+          iterations: bundle.project.iterations,
+          kind: 'shot',
+        });
+        return Astro.redirect(`/projects/${slug}/takes`);
+      } catch (e) {
+        error = `The re-shoot could not start: ${(e as Error).message}`;
+      }
     }
   } else if (action === 'edit-shot') {
     const shotId = String(form.get('shot') ?? '');
@@ -133,21 +173,27 @@ if (Astro.request.method === 'POST') {
 
 const models: string[] = JSON.parse(bundle.project.models);
 const refs = await env.DB.prepare(
-  `SELECT r.id, r.r2_key, r.filename, r.width, r.height FROM reference_use u
+  `SELECT r.id, r.r2_key, r.filename, r.name, r.width, r.height FROM reference_use u
      JOIN reference r ON r.id = u.reference_id
     WHERE u.owner_type='project' AND u.owner_id=?1 ORDER BY u.position`,
 )
   .bind(bundle.project.id)
-  .all<{ id: string; r2_key: string; filename: string; width: number | null; height: number | null }>();
+  .all<{ id: string; r2_key: string; filename: string; name: string | null; width: number | null; height: number | null }>();
 const refInfo = await loadProjectRefs(env, bundle.project.id);
 const attachedIds = new Set(refs.results.map((r) => r.id));
 const library = (await listLibrary(env, team.id)).filter((r) => !attachedIds.has(r.id));
-const estimate = estimateMicros(
-  models,
-  bundle.project.tier,
-  bundle.shots.length * bundle.project.iterations,
-  refInfo.megapixels,
-);
+const cells = bundle.shots.length * bundle.project.iterations;
+const estimate = estimateMicros(models, bundle.project.tier, cells, refInfo.megapixels);
+
+// Rough wall-clock from measured per-model speeds: the slowest model dominates,
+// cells run ~4 wide. Models without a measurement are left out rather than guessed.
+const measured = models
+  .map((a) => MODELS.find((m) => m.alias === a)?.typicalSeconds)
+  .filter((s): s is number => !!s);
+const estSeconds = measured.length ? Math.max(...measured) * Math.ceil(cells / 4) : null;
+const estTime =
+  estSeconds === null ? '' : estSeconds < 90 ? `~${estSeconds}s` : `~${Math.round(estSeconds / 60)} min`;
+const styleNames = new Map(styles.results.map((s) => [s.id, s.name]));
 ---
 
 <Base title={bundle.project.name} nav="projects" project={{ slug, name: bundle.project.name, active: 'shots' }}>
@@ -169,6 +215,22 @@ const estimate = estimateMicros(
         <header class="shot-head">
           <span class="mono shot-pos">{s.position}</span>
           <b>{s.label ?? `Shot ${s.position}`}</b>
+          {s.style_override_id && (
+            <em class="chip style-chip">{styleNames.get(s.style_override_id) ?? 'own style'}</em>
+          )}
+          <form method="post" class="style-override">
+            <input type="hidden" name="action" value="set-style" />
+            <input type="hidden" name="shot" value={s.id} />
+            <select name="style" title="Render this shot in its own style">
+              <option value="">project style — {bundle.style.name}</option>
+              {styles.results.map((st) => (
+                <option value={st.id} selected={st.id === s.style_override_id}>
+                  {st.name} {st.team_kind === 'house' ? '· house' : ''}
+                </option>
+              ))}
+            </select>
+            <button class="btn small ghost" type="submit">Set style</button>
+          </form>
         </header>
         <form method="post" class="shot-edit">
           <input type="hidden" name="action" value="edit-shot" />
@@ -179,6 +241,8 @@ const estimate = estimateMicros(
           <div class="row">
             <button class="btn small" type="submit">Save</button>
             <button class="btn small ghost" type="submit" name="action" value="suggest">Co-write 4 variants</button>
+            <button class="btn small ghost" type="submit" name="action" value="reshoot"
+              title="New takes of just this shot, with today's settings — old takes stay">Re-shoot</button>
             <button class="btn small ghost" type="submit" name="action" value="delete-shot"
               onclick="return confirm('Delete this shot?')">Delete</button>
           </div>
@@ -221,8 +285,9 @@ const estimate = estimateMicros(
         <div class="ref-strip">
           {refs.results.map((r) => (
             <figure class="ref-thumb">
-              <img src={`/img/${r.r2_key}`} alt={r.filename} loading="lazy" />
+              <img src={`/img/${r.r2_key}`} alt={r.name ?? r.filename} loading="lazy" />
               <figcaption>
+                <span class="ref-name" title={r.filename}>{r.name ?? r.filename}</span>
                 <span class="mono faint">{r.width}×{r.height}</span>
                 <form method="post">
                   <input type="hidden" name="action" value="remove-ref" />
@@ -247,8 +312,9 @@ const estimate = estimateMicros(
           <div class="ref-strip lib-scroll">
             {library.map((r) => (
               <figure class="ref-thumb">
-                <img src={`/img/${r.r2_key}`} alt={r.filename} loading="lazy" />
+                <img src={`/img/${r.r2_key}`} alt={r.name ?? r.filename} loading="lazy" />
                 <figcaption>
+                  <span class="ref-name" title={r.filename}>{r.name ?? r.filename}</span>
                   <span class="mono faint">{r.width}×{r.height}</span>
                   <form method="post">
                     <input type="hidden" name="action" value="attach-ref" />
@@ -279,13 +345,21 @@ const estimate = estimateMicros(
   <form method="post" class="run-bar">
     <input type="hidden" name="action" value="run" />
     <button class="btn" type="submit" disabled={!bundle.shots.length}>
-      Run {bundle.shots.length} shot{bundle.shots.length === 1 ? '' : 's'} · estimated {microsToUsd(estimate)}
+      Run {bundle.shots.length} shot{bundle.shots.length === 1 ? '' : 's'} · estimated {microsToUsd(estimate)}{estTime ? ` · ${estTime}` : ''}
     </button>
   </form>
 </Base>
 
 <style>
-  .shot-head { display: flex; align-items: baseline; gap: 0.7rem; }
+  .shot-head { display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap; }
+  .style-override { display: flex; gap: 0.4rem; align-items: center; margin-left: auto; }
+  .style-override select { width: auto; font-size: 0.82rem; padding: 0.35rem 0.5rem; }
+  .style-chip {
+    font: 700 0.62rem/1 var(--font-label); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 999px;
+    padding: 0.18rem 0.5rem; font-style: normal;
+  }
+  .ref-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 6rem; }
   .suggestions { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
   .suggestions .kicker { margin-bottom: 0.7rem; }
   .suggestion { display: flex; gap: 1rem; align-items: flex-start; margin-bottom: 0.8rem; }

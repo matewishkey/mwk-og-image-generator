@@ -72,6 +72,15 @@ export interface ModelSpec {
    */
   perInputMpUsd?: number;
   notes: string;
+  /**
+   * Measured wall-clock seconds per image, from real sweeps (2026-08-13 and
+   * later). Undefined = not measured yet; never guess one.
+   */
+  typicalSeconds?: number;
+  /** What this model is demonstrably good at — evidence, not vibes. */
+  goodFor?: string;
+  /** Where it loses to the others in this set. */
+  weakFor?: string;
   buildInput(o: BuildInputOpts): Record<string, unknown>;
 }
 
@@ -117,6 +126,8 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { '1K': 0.067, '2K': 0.101, '4K': 0.151 },
     seedable: false,
     notes: 'Best at keeping a real face recognisable across styles. Takes up to 14 references.',
+    typicalSeconds: 12,
+    goodFor: 'Faces stay recognisable across styles; spelled its speech bubbles perfectly on the honeypot run.',
     buildInput: ({ prompt, refs, tier }) => ({
       prompt,
       image_input: refs,
@@ -139,7 +150,10 @@ export const MODELS: ModelSpec[] = [
     tiers: ['medium', 'low', 'high'],
     priceUsd: { low: 0.012, medium: 0.047, high: 0.128, auto: 0.128 },
     seedable: false,
-    notes: 'Strongest instruction-following and the only one that reliably renders legible text.',
+    notes: 'Strongest instruction-following. Its edge is composition, not spelling: it renders the fifth thing in the prompt.',
+    typicalSeconds: 50,
+    goodFor: 'Composition — every detail the prompt asks for actually appears. The finisher.',
+    weakFor: '35\u201364s per image: it alone sets the wall-clock of any sweep it is in.',
     buildInput: ({ prompt, refs, tier }) => ({
       prompt,
       input_images: refs,
@@ -162,6 +176,9 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { '1K': 0.03, '2K': 0.03, '4K': 0.03 },
     seedable: false,
     notes: 'Cheapest of the set and fast. Strong stylisation, looser on likeness.',
+    typicalSeconds: 12,
+    goodFor: 'Strong stylisation for the price.',
+    weakFor: 'Looser on likeness than nano2.',
     buildInput: ({ prompt, refs, tier }) => ({
       prompt,
       image_input: refs,
@@ -186,6 +203,9 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { default: 0.08 },
     seedable: true,
     notes: 'Different aesthetic family to the others, best typography. Only takes ONE reference.',
+    typicalSeconds: 12,
+    goodFor: 'A different aesthetic family; the best typography of the reference-taking models.',
+    weakFor: 'Exactly one reference — a second is silently impossible.',
     buildInput: ({ prompt, refs, seed }) => ({
       prompt,
       ...(refs[0] ? { input_image: refs[0] } : {}),
@@ -208,6 +228,7 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { default: 0.04 },
     seedable: true,
     notes: 'Half the price of [max], noticeably weaker on typography.',
+    weakFor: 'Noticeably weaker typography than kontext [max].',
     buildInput: ({ prompt, refs, seed }) => ({
       prompt,
       ...(refs[0] ? { input_image: refs[0] } : {}),
@@ -258,6 +279,7 @@ export const MODELS: ModelSpec[] = [
     // Note it dropped `enhance_prompt` entirely — the knob that silently rewrote prompts
     // on seedream-4 does not exist here, so 4.5 always renders what you sent.
     notes: 'Stronger spatial understanding and world knowledge than 4, and it no longer rewrites the prompt.',
+    goodFor: 'Stronger spatial understanding than seedream 4.',
     buildInput: ({ prompt, refs, tier }) => ({
       prompt,
       image_input: refs,
@@ -279,6 +301,8 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { '1K': 0.15, '2K': 0.15, '4K': 0.3 },
     seedable: false,
     notes: 'The premium Google tier. Reach for it once a style is chosen, not while exploring.',
+    goodFor: 'The premium Google tier — finish work once a style is settled.',
+    weakFor: 'Price. Not for exploring.',
     buildInput: ({ prompt, refs, tier }) => ({
       prompt,
       image_input: refs,
@@ -303,6 +327,7 @@ export const MODELS: ModelSpec[] = [
     seedable: false,
     // Its aspect_ratio enum is only 1:1 / 3:2 / 2:3 — no 16:9 — so it crops harder.
     notes: 'Superseded by GPT Image 2. Kept because 3:2 is its widest ratio, which some crops suit.',
+    weakFor: 'Superseded by gpt2; widest ratio is 3:2.',
     buildInput: ({ prompt, refs, tier }) => ({
       prompt,
       input_images: refs,
@@ -324,6 +349,7 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { default: 0.09 },
     seedable: true,
     notes: 'The typography specialist — reach for it when legible text in the picture is the point.',
+    goodFor: 'Legible in-picture typography is its speciality.',
     buildInput: ({ prompt, refs, seed }) => ({
       prompt,
       aspect_ratio: '16:9',
@@ -347,6 +373,8 @@ export const MODELS: ModelSpec[] = [
     seedable: false,
     // TEXT ONLY. It has no image input at all, so it can never render a specific person.
     notes: 'Google photoreal flagship. TEXT-ONLY — cannot take a reference photo, so no likenesses.',
+    goodFor: 'Google photoreal flagship.',
+    weakFor: 'Text-only: no reference photos, no likenesses.',
     buildInput: ({ prompt, tier }) => ({
       prompt,
       aspect_ratio: '16:9',
@@ -366,6 +394,8 @@ export const MODELS: ModelSpec[] = [
     seedable: false,
     // TEXT ONLY, and the tier is its `style` enum rather than a quality level.
     notes: 'Built for brand and graphic-design output. TEXT-ONLY. --tier picks its style family.',
+    goodFor: 'Brand and graphic-design output.',
+    weakFor: 'Text-only: no reference photos.',
     buildInput: ({ prompt, tier }) => ({
       prompt,
       size: '1536x1024',
@@ -384,6 +414,9 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { '1MP': 0.0025 },
     seedable: true,
     notes: 'Absurdly cheap and the most-run model on Replicate. TEXT-ONLY. Use it to explore.',
+    typicalSeconds: 5,
+    goodFor: 'Testing whether a scene idea works at all, for a quarter of a cent.',
+    weakFor: 'Text-only, and not finish quality — draft here, finish on gpt2.',
     buildInput: ({ prompt, seed }) => ({
       prompt,
       width: 1344,
@@ -404,6 +437,9 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { default: 0.005 },
     seedable: true,
     notes: 'Sub-second, half a cent an image. TEXT-ONLY. The other exploration workhorse.',
+    typicalSeconds: 3,
+    goodFor: 'The fastest drafts in the set.',
+    weakFor: 'Text-only, and not finish quality.',
     buildInput: ({ prompt, seed }) => ({
       prompt,
       aspect_ratio: '16:9',
@@ -424,6 +460,7 @@ export const MODELS: ModelSpec[] = [
     priceUsd: { default: 0.02 },
     seedable: false,
     notes: 'xAI, cheap, and takes a reference image. A different training lineage to the rest.',
+    goodFor: 'Cheap AND takes a reference — a different training lineage when the usual looks stale.',
     buildInput: ({ prompt, refs }) => ({
       prompt,
       aspect_ratio: '16:9',
@@ -443,6 +480,7 @@ export const MODELS: ModelSpec[] = [
     seedable: false,
     // No enhance_prompt knob, same as 4.5 — it renders what it is sent.
     notes: 'Seedream 5 generation, with built-in reasoning. Cheaper than 4.5 and takes references.',
+    goodFor: 'Seedream 5 reasoning at a lower price than 4.5; takes references.',
     buildInput: ({ prompt, refs, tier }) => ({
       prompt,
       image_input: refs,

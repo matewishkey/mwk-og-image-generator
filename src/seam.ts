@@ -15,7 +15,15 @@ import type { Style } from './style.ts';
 
 export interface SeamIdea {
   shotId: string;
+  /**
+   * The shot's RAW idea — what is happening, nothing else. The engine composes
+   * it with the style exactly once (compose() in prompt.ts). Never send a
+   * composed prompt here: that is how the 2026-08-16 double-compose bug
+   * happened, where every take's billed prompt carried the style text twice.
+   */
   prompt: string;
+  /** Per-shot style override; absent = the run-level style. */
+  style?: Style;
 }
 
 export interface EngineRunRequest {
@@ -90,6 +98,8 @@ export interface EngineRenderRequest {
   layout: LayoutConfig;
   /** The brand kit's config JSON — exactly the BrandConfig shape brand.ts reads. */
   brand: unknown;
+  /** Finish-pass preset (src/effects.ts) burned in as the last render step. */
+  effect?: string;
   text: { title?: string; kicker?: string; tagline?: string };
   /** R2 art keys (never card keys — a band per panel looks absurd), inventory order. */
   panels: { key: string; label?: string }[];

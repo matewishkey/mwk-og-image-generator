@@ -8,7 +8,7 @@
  * what ties a proof to its style.
  */
 
-import { createRun, type ProjectRow, type StyleRow } from './runs';
+import { createRun, type ProjectRow, type ShotRow, type StyleRow } from './runs';
 import { ulid } from './ulid';
 
 export const PROOF_MODEL = 'zturbo';
@@ -27,7 +27,7 @@ export async function ensureProofsProject(
   env: Env,
   teamId: string,
   userId: string,
-): Promise<{ project: ProjectRow; shots: { id: string; position: number; label: string | null; prompt: string }[] }> {
+): Promise<{ project: ProjectRow; shots: ShotRow[] }> {
   let project = await env.DB.prepare(
     `SELECT * FROM project WHERE team_id = ?1 AND slug = ?2`,
   )
@@ -63,11 +63,11 @@ export async function ensureProofsProject(
   }
 
   const shots = await env.DB.prepare(
-    `SELECT id, position, label, prompt FROM shot
+    `SELECT id, position, label, prompt, style_override_id FROM shot
       WHERE project_id = ?1 AND deleted_at IS NULL ORDER BY position`,
   )
     .bind(project.id)
-    .all<{ id: string; position: number; label: string | null; prompt: string }>();
+    .all<{ id: string; position: number; label: string | null; prompt: string; style_override_id: string | null }>();
   return { project, shots: shots.results };
 }
 

@@ -1,7 +1,7 @@
 ---
 import Base from '../layouts/Base.astro';
 import { ENV } from '../lib/runtime';
-import { listLibrary, uploadReferences } from '../lib/media';
+import { listLibrary, renameReference, uploadReferences } from '../lib/media';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -11,10 +11,15 @@ let error = '';
 let note = '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const files = form.getAll('photos').filter((f): f is File => f instanceof File && f.size > 0);
-  const outcome = await uploadReferences(env, team.id, files);
-  if (outcome.saved) note = `${outcome.saved} photo${outcome.saved === 1 ? '' : 's'} in the library.`;
-  error = outcome.errors.join(' ');
+  if (String(form.get('action') ?? '') === 'rename') {
+    const done = await renameReference(env, team.id, String(form.get('ref') ?? ''), String(form.get('name') ?? ''));
+    if (done) note = 'Renamed.';
+  } else {
+    const files = form.getAll('photos').filter((f): f is File => f instanceof File && f.size > 0);
+    const outcome = await uploadReferences(env, team.id, files);
+    if (outcome.saved) note = `${outcome.saved} photo${outcome.saved === 1 ? '' : 's'} in the library.`;
+    error = outcome.errors.join(' ');
+  }
 }
 
 const refs = await listLibrary(env, team.id);
@@ -46,7 +51,13 @@ const refs = await listLibrary(env, team.id);
             <img src={`/img/${r.r2_key}`} alt={r.filename} loading="lazy" />
           </a>
           <figcaption>
-            <span class="fn">{r.filename}</span>
+            <form method="post" class="rename">
+              <input type="hidden" name="action" value="rename" />
+              <input type="hidden" name="ref" value={r.id} />
+              <input type="text" name="name" value={r.name ?? ''} placeholder={r.filename}
+                title="Name this image so it can be referred to by name" />
+              <button class="btn small ghost" type="submit">✓</button>
+            </form>
             <span class="mono faint">{r.width}×{r.height} · {r.uses} use{r.uses === 1 ? '' : 's'}</span>
           </figcaption>
         </figure>
@@ -62,7 +73,9 @@ const refs = await listLibrary(env, team.id);
   .lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 1rem; }
   .lib-grid > * { min-width: 0; }
   .lib-item img { width: 100%; height: 9rem; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--line); display: block; }
-  .lib-item figcaption { display: grid; gap: 0.1rem; margin-top: 0.35rem; font-size: 0.78rem; }
-  .fn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lib-item figcaption { display: grid; gap: 0.25rem; margin-top: 0.35rem; font-size: 0.78rem; }
+  .rename { display: flex; gap: 0.3rem; }
+  .rename input[type=text] { font-size: 0.82rem; padding: 0.3rem 0.5rem; min-width: 0; }
+  .rename .btn { padding: 0.3rem 0.5rem; }
   .faint { color: var(--faint); }
 </style>

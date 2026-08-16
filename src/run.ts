@@ -57,6 +57,13 @@ export interface RunOpts {
   /** One or more idea variants. The grid is ideas x styles x models x iterations. */
   ideas: string[];
   styles: Style[];
+  /**
+   * Per-idea style override, parallel to `ideas` (studio: per-shot styles).
+   * An overridden idea renders in ITS style instead of the loop style. Only
+   * meaningful with a single loop style; a multi-style sweep would render the
+   * overridden idea identically in every loop pass.
+   */
+  ideaStyles?: (Style | null)[];
   models: ModelSpec[];
   iterations: number;
   refs: string[];
@@ -234,14 +241,22 @@ export async function runSweep(opts: RunOpts): Promise<RunManifest> {
     refs: string[];
   }
 
-  const queue: Job[] = [];
-  for (const style of opts.styles) {
-    // Style-level refs come first: a style that ships its own reference means it, and
-    // the single-reference models would otherwise never see it.
-    const styleRefs = style.refs.length ? await Promise.all(style.refs.map(toDataUri)) : [];
-    const cellRefs = [...styleRefs, ...refUris];
+  // Style-level refs come first: a style that ships its own reference means it, and
+  // the single-reference models would otherwise never see it.
+  const styleRefCache = new Map<string, string[]>();
+  const refsOf = async (style: Style): Promise<string[]> => {
+    const hit = styleRefCache.get(style.slug);
+    if (hit) return hit;
+    const uris = style.refs.length ? await Promise.all(style.refs.map(toDataUri)) : [];
+    styleRefCache.set(style.slug, uris);
+    return uris;
+  };
 
+  const queue: Job[] = [];
+  for (const loopStyle of opts.styles) {
     for (const [ideaIndex, idea] of opts.ideas.entries()) {
+      const style = opts.ideaStyles?.[ideaIndex] ?? loopStyle;
+      const cellRefs = [...(await refsOf(style)), ...refUris];
       for (const model of opts.models) {
         const tier = pickTier(model, opts.tier);
         for (let i = 1; i <= opts.iterations; i++) {
