@@ -30,6 +30,7 @@ const USAGE = `mwk-og — branded OG images from a style + a prompt
   models      list the models, their reference limits and their per-image price
   brand       re-brand an image you already have (no API call, no cost)
   montage     combine several picked cards into one branded image (no API call, no cost)
+  studio      operate the live studio at og.matewishkey.com — mwk-og studio help
 
 gen
   -p, --prompt <idea>      what is happening; repeat -p for variants  (required)
@@ -380,6 +381,9 @@ try {
       break;
     case 'montage':
       await cmdMontage(rest);
+      break;
+    case 'studio':
+      await (await import('./studio.ts')).runStudio(rest);
       break;
     case undefined:
     case '-h':

@@ -1,8 +1,7 @@
 ---
 import Base from '../../layouts/Base.astro';
 import { ENV } from '../../lib/runtime';
-import { ulid } from '../../lib/ulid';
-import { slugify } from '../../../../src/style.ts';
+import { createProject } from '../../lib/projects';
 import { MODELS } from '../../../../src/models.ts';
 
 const env = ENV;
@@ -25,58 +24,20 @@ const DEFAULT_CHECKED = new Set(['zturbo', 'pimage']);
 let error = '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const name = String(form.get('name') ?? '').trim();
   const styleId = String(form.get('style') ?? '');
-  const models = form.getAll('models').map(String);
-  const iterations = Math.max(1, Math.min(8, Number(form.get('iterations') ?? 1)));
-
-  if (!name) error = 'A project needs a name.';
-  else if (!models.length) error = 'Pick at least one model.';
-  else if (!styles.results.some((s) => s.id === styleId)) error = 'Pick a style.';
+  if (!styles.results.some((s) => s.id === styleId)) error = 'Pick a style.';
   else {
-    const kit = await env.DB.prepare(
-      `SELECT b.id, b.default_title, b.default_tagline FROM brand_kit b
-         JOIN team t ON t.id = b.team_id
-        WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
-        ORDER BY t.kind DESC LIMIT 1`,
-    )
-      .bind(team.id)
-      .first<{ id: string; default_title: string | null; default_tagline: string | null }>();
-    if (!kit) {
-      error = 'No brand kit available.';
-    } else {
-      const slug = slugify(name) || ulid().toLowerCase();
-      const now = new Date().toISOString();
-      try {
-        await env.DB.prepare(
-          `INSERT INTO project (id, team_id, slug, name, description, default_style_id,
-             brand_kit_id, models, iterations, allow_text, title, tagline,
-             created_by, created_at, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13, ?13)`,
-        )
-          .bind(
-            ulid(),
-            team.id,
-            slug,
-            name,
-            String(form.get('description') ?? '').trim(),
-            styleId,
-            kit.id,
-            JSON.stringify(models),
-            iterations,
-            kit.default_title,
-            kit.default_tagline,
-            user.id,
-            now,
-          )
-          .run();
-        return Astro.redirect(`/projects/${slug}/shots`);
-      } catch (e) {
-        error = /UNIQUE/.test((e as Error).message)
-          ? `A project named "${slug}" already exists.`
-          : (e as Error).message;
-      }
-    }
+    const result = await createProject(env, {
+      teamId: team.id,
+      userId: user.id,
+      name: String(form.get('name') ?? ''),
+      description: String(form.get('description') ?? ''),
+      style: styleId,
+      models: form.getAll('models').map(String),
+      iterations: Number(form.get('iterations') ?? 1),
+    });
+    if ('slug' in result) return Astro.redirect(`/projects/${result.slug}/shots`);
+    error = result.error;
   }
 }
 ---

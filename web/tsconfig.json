@@ -9,6 +9,7 @@
   "exclude": [
     "dist",
     "../src/cli.ts",
+    "../src/studio.ts",
     "../src/replicate.ts",
     "../src/run.ts",
     "../src/brand.ts",

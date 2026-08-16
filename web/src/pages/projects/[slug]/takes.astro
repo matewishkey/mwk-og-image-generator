@@ -2,7 +2,8 @@
 import Base from '../../../layouts/Base.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
-import { createRun, microsToUsd } from '../../../lib/runs';
+import { microsToUsd } from '../../../lib/runs';
+import { applyTakeAction } from '../../../lib/takes';
 import { sweepLeases } from '../../../lib/sweep';
 
 const env = ENV;
@@ -19,49 +20,16 @@ let error = '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.get('action'));
-  const takeId = String(form.get('take') ?? '');
-  const nowIso = new Date().toISOString();
-
-  const take = await env.DB.prepare(
-    `SELECT t.id, t.shot_id, t.model_alias, t.status FROM take t
-      JOIN run r ON r.id = t.run_id
-     WHERE t.id = ?1 AND t.team_id = ?2 AND r.project_id = ?3`,
-  )
-    .bind(takeId, team.id, bundle.project.id)
-    .first<{ id: string; shot_id: string; model_alias: string; status: string }>();
-
-  if (take && action === 'pick' && take.status === 'succeeded') {
-    // Repicking is one idempotent UPDATE — the Pick lives on the shot.
-    await env.DB.prepare(`UPDATE shot SET picked_take_id = ?1, updated_at = ?2 WHERE id = ?3`)
-      .bind(take.id, nowIso, take.shot_id)
-      .run();
-    return Astro.redirect(`/projects/${slug}/takes`);
-  } else if (take && action === 'hide') {
-    await env.DB.prepare(`UPDATE take SET hidden_at = ?1 WHERE id = ?2`).bind(nowIso, take.id).run();
-    return Astro.redirect(`/projects/${slug}/takes`);
-  } else if (take && action === 'unhide') {
-    await env.DB.prepare(`UPDATE take SET hidden_at = NULL WHERE id = ?1`).bind(take.id).run();
-    return Astro.redirect(`/projects/${slug}/takes`);
-  } else if (take && action === 'reroll') {
-    const shot = bundle.shots.find((s) => s.id === take.shot_id);
-    if (shot) {
-      try {
-        await createRun(env, {
-          teamId: team.id,
-          userId: user.id,
-          project: bundle.project,
-          style: bundle.style,
-          shots: [shot],
-          models: [take.model_alias],
-          iterations: 1,
-          kind: 'take',
-          supersedeTakeId: take.id,
-        });
-        return Astro.redirect(`/projects/${slug}/takes`);
-      } catch (e) {
-        error = `The re-roll could not start: ${(e as Error).message}`;
-      }
-    }
+  if (action === 'pick' || action === 'hide' || action === 'unhide' || action === 'reroll') {
+    const result = await applyTakeAction(env, {
+      team,
+      userId: user.id,
+      bundle,
+      action,
+      takeId: String(form.get('take') ?? ''),
+    });
+    if ('ok' in result) return Astro.redirect(`/projects/${slug}/takes`);
+    error = result.error;
   }
 }
 

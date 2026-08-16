@@ -1,0 +1,81 @@
+/** Project creation, shared by the new-project page and the JSON API. */
+
+import { MODELS } from '../../../src/models.ts';
+import { slugify } from '../../../src/style.ts';
+import { ulid } from './ulid';
+
+export interface CreateProjectOpts {
+  teamId: string;
+  userId: string;
+  name: string;
+  description?: string;
+  /** Style id or slug, resolved against team-or-house styles (team wins). */
+  style: string;
+  models: string[];
+  iterations?: number;
+}
+
+export type CreateProjectResult = { slug: string } | { error: string; status: number };
+
+export async function createProject(env: Env, o: CreateProjectOpts): Promise<CreateProjectResult> {
+  const name = o.name.trim();
+  if (!name) return { error: 'A project needs a name.', status: 400 };
+
+  const imageAliases = new Set(MODELS.filter((m) => m.modality === 'image').map((m) => m.alias));
+  if (!o.models.length) return { error: 'Pick at least one model.', status: 400 };
+  const unknown = o.models.filter((m) => !imageAliases.has(m));
+  if (unknown.length) return { error: `Unknown model(s): ${unknown.join(', ')}`, status: 400 };
+  const iterations = Math.max(1, Math.min(8, Math.round(o.iterations ?? 1)));
+
+  const style = await env.DB.prepare(
+    `SELECT s.id FROM style s JOIN team t ON t.id = s.team_id
+      WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
+        AND (s.id = ?2 OR s.slug = ?2)
+      ORDER BY t.kind DESC LIMIT 1`,
+  )
+    .bind(o.teamId, o.style)
+    .first<{ id: string }>();
+  if (!style) return { error: `No style "${o.style}".`, status: 400 };
+
+  const kit = await env.DB.prepare(
+    `SELECT b.id, b.default_title, b.default_tagline FROM brand_kit b
+       JOIN team t ON t.id = b.team_id
+      WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
+      ORDER BY t.kind DESC LIMIT 1`,
+  )
+    .bind(o.teamId)
+    .first<{ id: string; default_title: string | null; default_tagline: string | null }>();
+  if (!kit) return { error: 'No brand kit available.', status: 400 };
+
+  const slug = slugify(name) || ulid().toLowerCase();
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO project (id, team_id, slug, name, description, default_style_id,
+         brand_kit_id, models, iterations, allow_text, title, tagline,
+         created_by, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?13, ?13)`,
+    )
+      .bind(
+        ulid(),
+        o.teamId,
+        slug,
+        name,
+        (o.description ?? '').trim(),
+        style.id,
+        kit.id,
+        JSON.stringify(o.models),
+        iterations,
+        kit.default_title,
+        kit.default_tagline,
+        o.userId,
+        now,
+      )
+      .run();
+    return { slug };
+  } catch (e) {
+    return /UNIQUE/.test((e as Error).message)
+      ? { error: `A project named "${slug}" already exists.`, status: 409 }
+      : { error: (e as Error).message, status: 500 };
+  }
+}

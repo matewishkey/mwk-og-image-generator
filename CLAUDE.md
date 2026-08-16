@@ -108,6 +108,19 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   render, not a choice.
 - Every screen keeps a pasteable URL; filters live in the query string.
 
+## The studio CLI — how Claude drives the site
+
+`mwk-og studio …` (`src/studio.ts`) operates the LIVE studio over `/api/*` JSON routes so
+mate can watch results appear in his browser. Auth is a bearer token: `MWK_STUDIO_TOKEN`
+in td-sops (`apps/mwk-og-image-generator.enc.env`); `MWK_STUDIO_URL` overrides the base
+for local dev. Mint a new token with `node web/scripts/mint-api-token.mjs` (prints the
+token once + the wrangler INSERT); revoke = `UPDATE api_token SET revoked_at=…`.
+The middleware honours bearer ONLY on `/api/*`, which never redirects — auth failures are
+401/403 JSON. Session cookies also work on /api; CSRF is blunted by requiring
+`content-type: application/json` on bodies (`readJson` in web/src/lib/api.ts). Mutation
+routes are thin wrappers over the same libs the pages use (lib/projects.ts, lib/takes.ts,
+lib/runs.ts) — change behaviour there, not in the routes.
+
 ## Phase 2 ops — the runbook
 
 - **Deploy web**: `cd web && npm run deploy` (build + `wrangler deploy -c dist/server/wrangler.json`
