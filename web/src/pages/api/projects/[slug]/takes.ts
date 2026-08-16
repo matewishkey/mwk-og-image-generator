@@ -28,8 +28,14 @@ export const POST: APIRoute = async (ctx) => {
   const body = await readJson<{ action?: string; take?: string }>(ctx.request);
   if (!body) return err(400, 'send a JSON body (content-type: application/json)');
   const action = body.action;
-  if (action !== 'pick' && action !== 'hide' && action !== 'unhide' && action !== 'reroll')
-    return err(400, 'action must be pick, hide, unhide or reroll');
+  if (
+    action !== 'pick' &&
+    action !== 'hide' &&
+    action !== 'unhide' &&
+    action !== 'reroll' &&
+    action !== 'giveup'
+  )
+    return err(400, 'action must be pick, hide, unhide, reroll or giveup');
   if (!body.take) return err(400, 'take is required');
 
   const result = await applyTakeAction(ENV, {

@@ -464,3 +464,54 @@ svg.i { width: 1em; height: 1em; flex: none; vertical-align: -0.125em; }
 .ws-hidden { margin-top: 0.8rem; }
 .ws-hidden summary { color: var(--faint); cursor: pointer; font-size: 0.78rem; }
 .ws-hidden .takes-grid { margin-top: 0.8rem; }
+
+/* ---------- round 4: modals, overview rows, highlight overlay ---------- */
+.ws-modal {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 0;
+  background: var(--surface); color: var(--ink);
+  max-width: min(94vw, 46rem); width: 100%;
+}
+.ws-modal.wide { max-width: min(96vw, 68rem); }
+.ws-modal::backdrop { background: rgb(0 0 0 / 0.55); }
+.ws-modal-body { padding: 1rem 1.2rem 1.2rem; max-height: 86vh; overflow-y: auto; }
+.ws-modal-head { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 0.8rem; }
+.ws-modal-x { margin-left: auto; }
+.ws-lightbox img { width: 100%; height: auto; border-radius: calc(var(--radius) - 2px); border: 1px solid var(--line); margin-bottom: 0.8rem; }
+
+.ws-pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.6rem; }
+.ws-pick-card {
+  display: grid; gap: 0.3rem; align-content: start; text-align: left; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0.6rem; font: inherit; color: var(--ink);
+}
+.ws-pick-card.on, .ws-pick-card:hover { border-color: var(--accent); }
+.ws-pick-imgs { display: flex; gap: 0.3rem; }
+.ws-pick-imgs img { width: 100%; min-width: 0; height: 4.6rem; object-fit: cover; border-radius: calc(var(--radius) - 2px); }
+.ws-pick-desc { color: var(--faint); font-size: 0.76rem; line-height: 1.35; }
+
+.ws-orow { text-decoration: none; color: inherit; }
+.ws-orow:hover { border-color: var(--accent); }
+.ws-live-chip { color: var(--accent); }
+.ws-fail-chip { color: var(--red); }
+.ws-style-more .ws-style-ph { font-size: 1rem; letter-spacing: 0.2em; }
+.ws-ref-note { color: var(--faint); font-size: 0.8rem; max-width: 46rem; margin-top: 0.5rem; }
+.ws-ref.warn img, .ws-ref .ws-ref-hole { border-color: var(--red); }
+.ws-ref-hole {
+  display: grid; place-items: center; height: 3.6rem; border: 1px dashed var(--line);
+  border-radius: var(--radius); color: var(--faint);
+}
+.ws-take-open { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; width: 100%; }
+.ws-take-open img { display: block; width: 100%; height: auto; }
+
+/* {shot N} highlight: backdrop paints the marks, the real textarea sits on top.
+   The wrap carries the field's ground because the textarea goes transparent. */
+.ws-hl-wrap { position: relative; display: block; background: var(--surface); border-radius: var(--radius); }
+.ws-hl-back {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  font: 400 1rem/1.5 var(--font-body); padding: 0.6rem 0.75rem;
+  white-space: pre-wrap; word-wrap: break-word; color: transparent;
+  border: 1px solid transparent; border-radius: var(--radius);
+}
+.ws-hl-back mark.tok { background: color-mix(in srgb, var(--accent) 28%, transparent); color: transparent; border-radius: 3px; }
+.ws-hl-back mark.tok.warn { background: color-mix(in srgb, var(--red) 30%, transparent); }
+.ws-hl-ta { position: relative; background: transparent; resize: none; overflow: hidden; width: 100%; }

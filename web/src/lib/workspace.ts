@@ -16,6 +16,8 @@ export interface WsTake {
   tier: string;
   iteration: number;
   status: string;
+  art_key: string | null;
+  art_thumb_key: string | null;
   card_key: string | null;
   thumb_key: string | null;
   cost_micros: number;
@@ -67,7 +69,7 @@ export async function takesPayload(env: Env, bundle: ProjectBundle): Promise<Tak
       .all<WsRun>(),
     env.DB.prepare(
       `SELECT t.id, t.shot_id, t.style_id, t.model_alias, t.tier, t.iteration, t.status,
-              t.card_key, t.thumb_key, t.cost_micros, t.duration_ms,
+              t.art_key, t.art_thumb_key, t.card_key, t.thumb_key, t.cost_micros, t.duration_ms,
               t.error_kind, t.error_message, t.created_at, t.hidden_at,
               (t.id = sh.picked_take_id) AS picked,
               (t.superseded_by_id IS NOT NULL) AS superseded

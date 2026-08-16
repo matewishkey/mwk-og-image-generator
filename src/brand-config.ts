@@ -44,10 +44,30 @@ export const BrandConfigSchema = z
       faint: hex,
       red: hex,
       redField: hex,
+      /** The ACCENT: emphasis (*word*) and kickers render in this at text size. */
       redDeep: hex,
       line: hex,
       onRed: hex,
     }),
+    /**
+     * Optional DARK palette: same nine roles, overlaid onto `colors` when a
+     * design renders with theme 'dark'. Absent = the kit renders identically
+     * in both themes. Partial on purpose — override only what changes.
+     */
+    colorsDark: z
+      .object({
+        paper: hex,
+        ink: hex,
+        mute: hex,
+        faint: hex,
+        red: hex,
+        redField: hex,
+        redDeep: hex,
+        line: hex,
+        onRed: hex,
+      })
+      .partial()
+      .optional(),
     scrim: z.object({ startY: z.number().int().min(0), opacity }),
     band: z.object({
       height: z.number().int().min(60).max(300),

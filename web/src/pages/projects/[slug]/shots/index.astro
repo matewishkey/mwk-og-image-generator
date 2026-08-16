@@ -1,0 +1,67 @@
+---
+/**
+ * The project overview (round 4): one light row per shot; the heavy editor
+ * lives at /shots/<position>. Project-level refs + run-all live here.
+ */
+import Base from '../../../../layouts/Base.astro';
+import Overview from '../../../../components/ws/Overview';
+import { ENV } from '../../../../lib/runtime';
+import { loadProject } from '../../../../lib/data';
+import { estimateMicros, loadProjectRefs } from '../../../../lib/runs';
+import { listStyles } from '../../../../lib/styles';
+import { refState } from '../../../../lib/media';
+import { takesPayload } from '../../../../lib/workspace';
+import { sweepLeases } from '../../../../lib/sweep';
+import { MODELS } from '../../../../../../src/models.ts';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+await sweepLeases(env);
+const bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+
+const models: string[] = JSON.parse(bundle.project.models);
+const [styleRows, takes, refs, refInfo] = await Promise.all([
+  listStyles(env, team.id),
+  takesPayload(env, bundle),
+  refState(env, team.id, bundle.project.id, bundle.shots.map((s) => s.id)),
+  loadProjectRefs(env, bundle.project.id),
+]);
+
+const specs = models.map((a) => MODELS.find((m) => m.alias === a)).filter((m) => !!m);
+const measured = specs.map((m) => m.typicalSeconds).filter((s): s is number => !!s);
+
+const initial = {
+  slug,
+  projectName: bundle.project.name,
+  iterations: bundle.project.iterations,
+  perCellMicros: estimateMicros(models, bundle.project.tier, 1, refInfo.megapixels),
+  maxSeconds: measured.length ? Math.max(...measured) : 0,
+  projectStyleIds: bundle.styles.map((s) => s.id),
+  styleNames: Object.fromEntries(styleRows.map((s) => [s.id, s.name])),
+  modelRefs: specs.map((m) => ({ alias: m.alias, refStyle: m.refStyle, maxRefs: m.maxRefs })),
+  refRole: bundle.project.ref_role,
+  takes,
+  refs,
+};
+
+const styleNames = bundle.styles.map((s) => s.name).join(', ');
+---
+
+<Base title={bundle.project.name} nav="projects" project={{ slug, name: bundle.project.name, active: 'shots' }}>
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
+    <h1>Shots & takes</h1>
+    <p class="sub">
+      Style{bundle.styles.length === 1 ? '' : 's'}: <b>{styleNames}</b> ·
+      Models: <span class="mono">{models.join(', ')}</span> ·
+      {bundle.project.iterations} iteration{bundle.project.iterations === 1 ? '' : 's'} ·
+      click a shot to edit it
+    </p>
+  </div>
+
+  <Overview client:load initial={initial} />
+</Base>

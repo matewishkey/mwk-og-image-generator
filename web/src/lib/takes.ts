@@ -7,7 +7,7 @@ export interface TakeActionOpts {
   team: TeamRef;
   userId: string;
   bundle: ProjectBundle;
-  action: 'pick' | 'hide' | 'unhide' | 'reroll';
+  action: 'pick' | 'hide' | 'unhide' | 'reroll' | 'giveup';
   takeId: string;
 }
 
@@ -42,6 +42,21 @@ export async function applyTakeAction(env: Env, o: TakeActionOpts): Promise<Take
 
   if (o.action === 'unhide') {
     await env.DB.prepare(`UPDATE take SET hidden_at = NULL WHERE id = ?1`).bind(take.id).run();
+    return { ok: true };
+  }
+
+  if (o.action === 'giveup') {
+    // A take stuck live (dead engine, throttle) — the same flip the lease
+    // sweeper does after 30 minutes, available NOW for exactly one take.
+    const r = await env.DB.prepare(
+      `UPDATE take SET status='failed', error_kind='abandoned',
+         error_message='given up from the workspace', finished_at=?1
+       WHERE id=?2 AND status IN ('queued','running','rendering')`,
+    )
+      .bind(nowIso, take.id)
+      .run();
+    if (r.meta.changes === 0)
+      return { error: 'This take is not running any more — reload.', status: 409 };
     return { ok: true };
   }
 

@@ -118,8 +118,17 @@ async function localFont(fileKey: string): Promise<string> {
 }
 
 /** Validate a kit off the seam (a cast let a broken kit crash pango mid-render). */
-async function resolveBrand(raw: unknown, markKey?: string): Promise<BrandConfig> {
+async function resolveBrand(
+  raw: unknown,
+  markKey?: string,
+  theme?: 'light' | 'dark',
+): Promise<BrandConfig> {
   let brand = raw ? BrandConfigSchema.parse(raw) : await loadBrand();
+  // Dark theme: overlay the kit's dark palette when it has one; a kit without
+  // colorsDark renders identically in both themes rather than erroring.
+  if (theme === 'dark' && brand.colorsDark) {
+    brand = { ...brand, colors: { ...brand.colors, ...brand.colorsDark } };
+  }
   if (markKey) brand = { ...brand, logo: { ...brand.logo, mark: await localMark(markKey) } };
   for (const role of ['title', 'kicker', 'tagline'] as const) {
     const fk = brand[role].fileKey;
@@ -226,6 +235,7 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
   const base = `${req.r2Prefix}/takes/${shotId}__${cell.style}__${cell.model}__${cell.iteration}`;
 
   let artKey: string | undefined;
+  let artThumbKey: string | undefined;
   let cardKey: string | undefined;
   let thumbKey: string | undefined;
   let width: number | undefined;
@@ -239,10 +249,15 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
       width = meta.width;
       height = meta.height;
       artKey = `${base}/art.png`;
+      artThumbKey = `${base}/art-thumb.webp`;
       cardKey = `${base}/card.png`;
       thumbKey = `${base}/thumb.webp`;
+      // Two thumbs on purpose: the CARD thumb for design/pack contexts, the raw
+      // ART thumb for shot-context grids (the band does not belong there).
       const thumb = await sharp(card).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
+      const artThumb = await sharp(art).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
       await r2Put(artKey, art, 'image/png');
+      await r2Put(artThumbKey, artThumb, 'image/webp');
       await r2Put(cardKey, card, 'image/png');
       await r2Put(thumbKey, thumb, 'image/webp');
     }
@@ -251,6 +266,7 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
     // out (with the cost) so the ledger row is written — the take fails at 'upload'.
     cell.error = `upload: ${(e as Error).message}`;
     artKey = undefined;
+    artThumbKey = undefined;
     cardKey = undefined;
     thumbKey = undefined;
   }
@@ -271,6 +287,7 @@ async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Pr
     retries: cell.retries,
     error: cell.error,
     artKey,
+    artThumbKey,
     cardKey,
     thumbKey,
     width,
@@ -321,9 +338,18 @@ const server = createServer((req, res) => {
       if (req.url === '/render') {
         const r = JSON.parse(body) as EngineRenderRequest;
         const cfg = LayoutConfigSchema.parse(r.layout);
-        const brand = await resolveBrand(r.brand, r.markKey);
+        const brand = await resolveBrand(r.brand, r.markKey, r.theme);
         const panels = [];
         for (const pnl of r.panels) panels.push({ buf: await r2Get(pnl.key), label: pnl.label });
+
+        if (r.inline) {
+          // Live preview: PNG bytes straight back, nothing persisted anywhere.
+          let png = await renderDesign(cfg, brand, r.width, r.height, r.text, panels);
+          if (r.effect) png = await applyEffect(png, r.effect, r.width, r.height);
+          res.writeHead(200, { 'content-type': 'image/png' });
+          res.end(png);
+          return;
+        }
 
         if (r.outputs?.length) {
           // Batch: same layout + panels at every size; panels fetched exactly once.

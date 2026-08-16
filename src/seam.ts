@@ -237,6 +237,14 @@ export interface EngineRenderRequest {
   /** Batch mode: render the same layout+panels at each size. Panels are fetched
    *  once, which is the whole point — outKey/width/height above are ignored. */
   outputs?: RenderOutput[];
+  /**
+   * Inline mode: respond with the PNG bytes instead of writing to R2 — the
+   * layout editor's live preview. outKey/thumbKey/outputs are ignored; nothing
+   * is persisted anywhere.
+   */
+  inline?: boolean;
+  /** Render with the kit's dark palette (colorsDark, falling back to light). */
+  theme?: 'light' | 'dark';
   layout: LayoutConfig;
   /** The brand kit's config JSON — exactly the BrandConfig shape brand.ts reads. */
   brand: unknown;
@@ -289,6 +297,8 @@ export type EngineEvent =
       retries?: number;
       error?: string;
       artKey?: string;
+      /** 640w webp of the RAW art — the honest thumb for shot-context grids. */
+      artThumbKey?: string;
       cardKey?: string;
       thumbKey?: string;
       width?: number;

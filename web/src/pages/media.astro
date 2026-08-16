@@ -47,9 +47,45 @@ const refs = await listLibrary(env, team.id);
   {note && <p class="flash">{note}</p>}
 
   <form method="post" enctype="multipart/form-data" class="card upload">
-    <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required data-jpeg />
+    <label class="drop-zone" id="drop-zone">
+      <Icon name="upload" />
+      <b>Drop images here</b>
+      <span>or click to browse — several at once is fine; paste works too</span>
+      <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required data-jpeg />
+    </label>
     <button class="btn small" type="submit" data-running="Uploading…"><Icon name="upload" />Upload</button>
   </form>
+  <script is:inline>
+    // Drop + paste land in the SAME input[data-jpeg], so the global JPEG
+    // conversion applies, then the form submits itself.
+    (() => {
+      const zone = document.getElementById('drop-zone');
+      const input = zone.querySelector('input[type=file]');
+      const accept = (files) => {
+        const dt = new DataTransfer();
+        for (const f of files) if (f.type.startsWith('image/')) dt.items.add(f);
+        if (!dt.files.length) return;
+        input.files = dt.files;
+        // The JPEG converter fires 'jpeg-done' when it has rewritten the files;
+        // submit then (3s fallback — the server accepts PNG/WebP anyway).
+        const submit = () => input.form.requestSubmit();
+        const t = setTimeout(submit, 3000);
+        input.addEventListener('jpeg-done', () => { clearTimeout(t); submit(); }, { once: true });
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      ['dragenter', 'dragover'].forEach((t) =>
+        zone.addEventListener(t, (e) => { e.preventDefault(); zone.classList.add('over'); }),
+      );
+      ['dragleave', 'drop'].forEach((t) =>
+        zone.addEventListener(t, (e) => { e.preventDefault(); zone.classList.remove('over'); }),
+      );
+      zone.addEventListener('drop', (e) => accept(e.dataTransfer.files));
+      document.addEventListener('paste', (e) => {
+        const files = [...(e.clipboardData?.files ?? [])];
+        if (files.length) accept(files);
+      });
+    })();
+  </script>
 
   <div class="list">
     {
@@ -66,7 +102,7 @@ const refs = await listLibrary(env, team.id);
               <input type="hidden" name="ref" value={r.id} />
               <input type="text" name="name" value={r.name ?? ''} placeholder={r.filename}
                 title="Name this image so it can be referred to by name" />
-              <button class="btn small ghost" type="submit"><Icon name="save" />Save name</button>
+              <button class="btn small ghost" type="submit" data-running="Saving…"><Icon name="save" />Save name</button>
             </form>
             <span class="list-meta mono">
               {r.filename} · {r.width}×{r.height} · {r.uses} use{r.uses === 1 ? '' : 's'} · {r.created_at.slice(0, 10)}
@@ -88,9 +124,17 @@ const refs = await listLibrary(env, team.id);
 </Base>
 
 <style>
-  .upload { display: flex; gap: 0.8rem; align-items: center; margin-bottom: 1.5rem; max-width: 40rem; }
-  .upload input[type=file] { flex: 1; background: none; border: 0; color: var(--mute); font-size: 0.85rem; }
-  .rename { display: flex; gap: 0.4rem; max-width: 24rem; }
-  .rename input[type=text] { font-size: 0.85rem; padding: 0.35rem 0.55rem; min-width: 0; }
-  .rename .btn { white-space: nowrap; }
+  .upload { display: flex; gap: 0.8rem; align-items: center; margin-bottom: 1.5rem; max-width: 46rem; }
+  .drop-zone {
+    flex: 1; display: grid; justify-items: center; gap: 0.25rem; cursor: pointer;
+    border: 2px dashed var(--line); border-radius: var(--radius);
+    padding: 1.4rem 1rem; text-align: center; color: var(--mute);
+  }
+  .drop-zone:hover, .drop-zone.over { border-color: var(--accent); color: var(--accent); }
+  .drop-zone span { font-size: 0.8rem; color: var(--faint); }
+  .drop-zone svg.i { width: 1.4em; height: 1.4em; }
+  .drop-zone input[type=file] { display: none; }
+  .rename { display: flex; gap: 0.4rem; max-width: 24rem; align-items: center; }
+  .rename input[type=text] { flex: 1; font-size: 0.85rem; padding: 0.35rem 0.55rem; min-width: 0; }
+  .rename .btn { white-space: nowrap; flex: none; }
 </style>

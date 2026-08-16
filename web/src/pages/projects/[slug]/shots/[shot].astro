@@ -1,0 +1,93 @@
+---
+/**
+ * One shot's own page (round 4): the full editor — prompt with {shot N}
+ * highlighting, co-write, styles, references, its contact sheet.
+ */
+import Base from '../../../../layouts/Base.astro';
+import ShotEditor from '../../../../components/ws/ShotEditor';
+import { ENV } from '../../../../lib/runtime';
+import { loadProject } from '../../../../lib/data';
+import { estimateMicros, loadProjectRefs } from '../../../../lib/runs';
+import { listStyles } from '../../../../lib/styles';
+import { proofThumbs } from '../../../../lib/proofs';
+import { refState } from '../../../../lib/media';
+import { takesPayload } from '../../../../lib/workspace';
+import { sweepLeases } from '../../../../lib/sweep';
+import { MODELS } from '../../../../../../src/models.ts';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+await sweepLeases(env);
+const bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+
+const pos = Number(Astro.params.shot);
+const shot = bundle.shots.find((s) => s.position === pos);
+if (!shot) return Astro.redirect(`/projects/${slug}/shots`);
+
+const models: string[] = JSON.parse(bundle.project.models);
+const [styleRows, faceThumbs, sceneThumbs, takes, refs, refInfo] = await Promise.all([
+  listStyles(env, team.id),
+  proofThumbs(env, team.id),
+  proofThumbs(env, team.id, 'scene'),
+  takesPayload(env, bundle),
+  refState(env, team.id, bundle.project.id, bundle.shots.map((s) => s.id)),
+  loadProjectRefs(env, bundle.project.id),
+]);
+
+const specs = models.map((a) => MODELS.find((m) => m.alias === a)).filter((m) => !!m);
+
+const initial = {
+  slug,
+  shotId: shot.id,
+  projectName: bundle.project.name,
+  iterations: bundle.project.iterations,
+  perCellMicros: estimateMicros(models, bundle.project.tier, 1, refInfo.megapixels),
+  styles: styleRows.map((s) => ({
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    house: s.team_kind === 'house',
+    thumb: faceThumbs.get(s.id) ?? null,
+    scene: sceneThumbs.get(s.id) ?? null,
+  })),
+  projectStyleIds: bundle.styles.map((s) => s.id),
+  primaryStyleId: bundle.style.id,
+  modelRefs: specs.map((m) => ({ alias: m.alias, refStyle: m.refStyle, maxRefs: m.maxRefs })),
+  takes,
+  refs,
+};
+
+const prev = bundle.shots.filter((s) => s.position < pos).at(-1);
+const next = bundle.shots.find((s) => s.position > pos);
+---
+
+<Base
+  title={`${bundle.project.name} · shot ${pos}`}
+  nav="projects"
+  project={{ slug, name: bundle.project.name, active: 'shots' }}
+>
+  <div class="page-head">
+    <p class="kicker">
+      <span class="g">/</span><a href={`/projects/${slug}/shots`}>{bundle.project.name}</a>
+    </p>
+    <div class="shot-nav">
+      <h1>{shot.label ?? `Shot ${pos}`}</h1>
+      <span class="shot-nav-links">
+        <a class="btn small ghost" href={`/projects/${slug}/shots`}>← all shots</a>
+        {prev && <a class="btn small ghost" href={`/projects/${slug}/shots/${prev.position}`}>‹ shot {prev.position}</a>}
+        {next && <a class="btn small ghost" href={`/projects/${slug}/shots/${next.position}`}>shot {next.position} ›</a>}
+      </span>
+    </div>
+  </div>
+
+  <ShotEditor client:load initial={initial} />
+</Base>
+
+<style>
+  .shot-nav { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+  .shot-nav-links { display: flex; gap: 0.4rem; margin-left: auto; }
+</style>

@@ -204,6 +204,9 @@ const PROJECT_TABS = [
             }
           }
           if (changed) inp.files = dt.files;
+          // Signal completion for programmatic senders (the media drop zone
+          // waits for this before submitting).
+          inp.dispatchEvent(new CustomEvent('jpeg-done'));
         });
       });
     </script>
