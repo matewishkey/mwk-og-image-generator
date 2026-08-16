@@ -98,6 +98,54 @@ export async function deleteReference(env: Env, teamId: string, refId: string): 
   return true;
 }
 
+export interface RefRow {
+  id: string;
+  r2_key: string;
+  filename: string;
+  name: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+/** Refs attached to one owner (project or shot), in position order. */
+export async function ownerRefs(
+  env: Env,
+  ownerType: 'project' | 'shot',
+  ownerId: string,
+): Promise<RefRow[]> {
+  const rows = await env.DB.prepare(
+    `SELECT r.id, r.r2_key, r.filename, r.name, r.width, r.height FROM reference_use u
+       JOIN reference r ON r.id = u.reference_id
+      WHERE u.owner_type = ?1 AND u.owner_id = ?2 AND r.deleted_at IS NULL
+      ORDER BY u.position`,
+  )
+    .bind(ownerType, ownerId)
+    .all<RefRow>();
+  return rows.results;
+}
+
+export interface RefState {
+  project: RefRow[];
+  shots: Record<string, RefRow[]>;
+  library: LibraryRef[];
+}
+
+/** The full reference state the workspace island renders. */
+export async function refState(
+  env: Env,
+  teamId: string,
+  projectId: string,
+  shotIds: string[],
+): Promise<RefState> {
+  const project = await ownerRefs(env, 'project', projectId);
+  const shots: Record<string, RefRow[]> = {};
+  for (const id of shotIds) {
+    const rows = await ownerRefs(env, 'shot', id);
+    if (rows.length) shots[id] = rows;
+  }
+  return { project, shots, library: await listLibrary(env, teamId) };
+}
+
 export interface MarkInfo {
   mime: string;
   ext: string;

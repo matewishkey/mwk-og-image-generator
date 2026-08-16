@@ -1,454 +1,76 @@
 ---
+/**
+ * The project workspace: shots + takes merged onto one live page (round 3).
+ * This shell only gathers initial state; every interaction happens in the
+ * Workspace island via /api/* — no form POSTs, no reloads, no lost edits.
+ */
 import Base from '../../../layouts/Base.astro';
-import Icon from '../../../components/Icon.astro';
+import Workspace from '../../../components/Workspace';
 import { ENV } from '../../../lib/runtime';
-import { ulid } from '../../../lib/ulid';
 import { loadProject } from '../../../lib/data';
-import { createRun, estimateMicros, microsToUsd } from '../../../lib/runs';
-import { suggestShotVariants } from '../../../lib/generate';
-import { loadProjectRefs } from '../../../lib/runs';
+import { estimateMicros, loadProjectRefs } from '../../../lib/runs';
+import { listStyles } from '../../../lib/styles';
+import { proofThumbs } from '../../../lib/proofs';
+import { refState } from '../../../lib/media';
+import { takesPayload } from '../../../lib/workspace';
+import { sweepLeases } from '../../../lib/sweep';
 import { MODELS } from '../../../../../src/models.ts';
-import { listLibrary, uploadReferences } from '../../../lib/media';
-import { PROOFS_SLUG } from '../../../lib/proofs';
 
 const env = ENV;
 const team = Astro.locals.team;
-const user = Astro.locals.user!;
 if (!team) return new Response('No team', { status: 403 });
 
 const slug = Astro.params.slug!;
-let bundle = await loadProject(env, team.id, slug);
+await sweepLeases(env);
+const bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
 
-const styles = await env.DB.prepare(
-  `SELECT s.id, s.name, t.kind AS team_kind FROM style s JOIN team t ON t.id = s.team_id
-    WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL
-    ORDER BY t.kind DESC, s.name`,
-)
-  .bind(team.id)
-  .all<{ id: string; name: string; team_kind: string }>();
-
-let error = '';
-let suggestFor = '';
-let suggestions: string[] = [];
-if (Astro.request.method === 'POST') {
-  const form = await Astro.request.formData();
-  // getAll().at(-1): the clicked button's action entry lands AFTER the form's
-  // hidden default. get() takes the FIRST entry, which silently ran edit-shot
-  // for every override button — the round-1 co-write/delete bug.
-  const action = String(form.getAll('action').at(-1) ?? '');
-  const now = new Date().toISOString();
-
-  if (action === 'add-shot') {
-    const prompt = String(form.get('prompt') ?? '').trim();
-    if (prompt) {
-      const next = (bundle.shots.at(-1)?.position ?? 0) + 1;
-      await env.DB.prepare(
-        `INSERT INTO shot (id, project_id, position, label, prompt, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)`,
-      )
-        .bind(
-          ulid(),
-          bundle.project.id,
-          next,
-          // Every shot gets an addressable name — "Shot 3" beats an id in conversation.
-          String(form.get('label') ?? '').trim() || `Shot ${next}`,
-          prompt,
-          now,
-        )
-        .run();
-    }
-  } else if (action === 'set-style') {
-    const shotId = String(form.get('shot') ?? '');
-    const styleId = String(form.get('style') ?? '');
-    const valid = styleId === '' || styles.results.some((s) => s.id === styleId);
-    if (valid && bundle.shots.some((s) => s.id === shotId)) {
-      await env.DB.prepare(
-        `UPDATE shot SET style_override_id=?1, version=version+1, updated_at=?2 WHERE id=?3`,
-      )
-        .bind(styleId || null, now, shotId)
-        .run();
-    }
-  } else if (action === 'edit-shot') {
-    const shotId = String(form.get('shot') ?? '');
-    const prompt = String(form.get('prompt') ?? '').trim();
-    if (!prompt) error = 'The prompt can’t be empty — nothing was saved.';
-    else if (bundle.shots.some((s) => s.id === shotId)) {
-      await env.DB.prepare(
-        `UPDATE shot SET prompt=?1, label=?2, version=version+1, updated_at=?3 WHERE id=?4`,
-      )
-        .bind(prompt, String(form.get('label') ?? '').trim() || null, now, shotId)
-        .run();
-    }
-  } else if (action === 'delete-shot') {
-    const shotId = String(form.get('shot') ?? '');
-    if (bundle.shots.some((s) => s.id === shotId)) {
-      await env.DB.prepare(`UPDATE shot SET deleted_at=?1 WHERE id=?2`).bind(now, shotId).run();
-    }
-  } else if (action === 'upload-refs' || action === 'attach-ref') {
-    const posRow = await env.DB.prepare(
-      `SELECT coalesce(max(position), 0) AS p FROM reference_use WHERE owner_type='project' AND owner_id=?1`,
-    )
-      .bind(bundle.project.id)
-      .first<{ p: number }>();
-    let pos = posRow?.p ?? 0;
-    let attach: string[] = [];
-    if (action === 'upload-refs') {
-      const files = form.getAll('photos').filter((f): f is File => f instanceof File && f.size > 0);
-      const outcome = await uploadReferences(env, team.id, files);
-      error = outcome.errors.join(' ');
-      attach = outcome.ids;
-    } else {
-      attach = [String(form.get('ref') ?? '')].filter(Boolean);
-    }
-    for (const refId of attach) {
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO reference_use (reference_id, owner_type, owner_id, position)
-         VALUES (?1, 'project', ?2, ?3)`,
-      )
-        .bind(refId, bundle.project.id, ++pos)
-        .run();
-    }
-  } else if (action === 'remove-ref') {
-    await env.DB.prepare(
-      `DELETE FROM reference_use WHERE owner_type='project' AND owner_id=?1 AND reference_id=?2`,
-    )
-      .bind(bundle.project.id, String(form.get('ref') ?? ''))
-      .run();
-  } else if (action === 'ref-role') {
-    await env.DB.prepare(`UPDATE project SET ref_role=?1, updated_at=?2 WHERE id=?3`)
-      .bind(String(form.get('ref_role') ?? '').trim() || null, now, bundle.project.id)
-      .run();
-  } else if (action === 'suggest') {
-    const shotId = String(form.get('shot') ?? '');
-    const shot = bundle.shots.find((s) => s.id === shotId);
-    if (shot) {
-      try {
-        suggestFor = shot.id;
-        suggestions = await suggestShotVariants(env, {
-          current: shot.prompt,
-          projectName: bundle.project.name,
-          otherShots: bundle.shots.filter((s) => s.id !== shot.id).map((s) => s.prompt),
-          n: 4,
-        });
-      } catch (e) {
-        error = `The co-writer failed: ${(e as Error).message}`;
-      }
-    }
-  } else if (action === 'run') {
-    if (!bundle.shots.length) error = 'Add at least one shot first.';
-    else {
-      try {
-        await createRun(env, {
-          teamId: team.id,
-          userId: user.id,
-          project: bundle.project,
-          style: bundle.style,
-          shots: bundle.shots,
-          models: JSON.parse(bundle.project.models),
-          iterations: bundle.project.iterations,
-          kind: 'full',
-        });
-        return Astro.redirect(`/projects/${slug}/takes`);
-      } catch (e) {
-        error = `The run could not start: ${(e as Error).message}`;
-      }
-    }
-  }
-  bundle = (await loadProject(env, team.id, slug))!;
-}
-
 const models: string[] = JSON.parse(bundle.project.models);
-const refs = await env.DB.prepare(
-  `SELECT r.id, r.r2_key, r.filename, r.name, r.width, r.height FROM reference_use u
-     JOIN reference r ON r.id = u.reference_id
-    WHERE u.owner_type='project' AND u.owner_id=?1 ORDER BY u.position`,
-)
-  .bind(bundle.project.id)
-  .all<{ id: string; r2_key: string; filename: string; name: string | null; width: number | null; height: number | null }>();
-const refInfo = await loadProjectRefs(env, bundle.project.id);
-const attachedIds = new Set(refs.results.map((r) => r.id));
-const library = (await listLibrary(env, team.id)).filter((r) => !attachedIds.has(r.id));
-const cells = bundle.shots.length * bundle.project.iterations;
-const estimate = estimateMicros(models, bundle.project.tier, cells, refInfo.megapixels);
+const [styleRows, thumbs, takes, refs, refInfo] = await Promise.all([
+  listStyles(env, team.id),
+  proofThumbs(env, team.id),
+  takesPayload(env, bundle),
+  refState(env, team.id, bundle.project.id, bundle.shots.map((s) => s.id)),
+  loadProjectRefs(env, bundle.project.id),
+]);
 
-// Rough wall-clock from measured per-model speeds: the slowest model dominates,
-// cells run ~4 wide. Models without a measurement are left out rather than guessed.
 const measured = models
   .map((a) => MODELS.find((m) => m.alias === a)?.typicalSeconds)
   .filter((s): s is number => !!s);
-const estSeconds = measured.length ? Math.max(...measured) * Math.ceil(cells / 4) : null;
-const estTime =
-  estSeconds === null ? '' : estSeconds < 90 ? `~${estSeconds}s` : `~${Math.round(estSeconds / 60)} min`;
-const styleNames = new Map(styles.results.map((s) => [s.id, s.name]));
 
-// Latest 'face' proof thumb per style — the preview in the per-shot style strip.
-const proofThumbs = await env.DB.prepare(
-  `SELECT style_id, thumb_key FROM (
-     SELECT t.style_id, t.thumb_key,
-            row_number() OVER (PARTITION BY t.style_id ORDER BY t.created_at DESC) AS rn
-       FROM take t
-       JOIN run r ON r.id = t.run_id
-       JOIN project p ON p.id = r.project_id
-       JOIN shot sh ON sh.id = t.shot_id
-      WHERE p.team_id = ?1 AND p.slug = ?2
-        AND t.status = 'succeeded' AND t.thumb_key IS NOT NULL AND sh.label = 'face'
-   ) WHERE rn = 1`,
-)
-  .bind(team.id, PROOFS_SLUG)
-  .all<{ style_id: string; thumb_key: string }>();
-const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_key]));
+const initial = {
+  slug,
+  projectName: bundle.project.name,
+  models,
+  iterations: bundle.project.iterations,
+  refRole: bundle.project.ref_role,
+  styles: styleRows.map((s) => ({
+    id: s.id,
+    name: s.name,
+    house: s.team_kind === 'house',
+    thumb: thumbs.get(s.id) ?? null,
+  })),
+  projectStyleIds: bundle.styles.map((s) => s.id),
+  primaryStyleId: bundle.style.id,
+  perCellMicros: estimateMicros(models, bundle.project.tier, 1, refInfo.megapixels),
+  maxSeconds: measured.length ? Math.max(...measured) : 0,
+  takes,
+  refs,
+};
+
+const styleNames = bundle.styles.map((s) => s.name).join(', ');
 ---
 
 <Base title={bundle.project.name} nav="projects" project={{ slug, name: bundle.project.name, active: 'shots' }}>
   <div class="page-head">
     <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
-    <h1>Shots</h1>
+    <h1>Shots & takes</h1>
     <p class="sub">
-      Style: <b>{bundle.style.name}</b> · Models: <span class="mono">{models.join(', ')}</span> ·
+      Style{bundle.styles.length === 1 ? '' : 's'}: <b>{styleNames}</b> ·
+      Models: <span class="mono">{models.join(', ')}</span> ·
       {bundle.project.iterations} iteration{bundle.project.iterations === 1 ? '' : 's'}
     </p>
   </div>
 
-
-  {error && <p class="flash">{error}</p>}
-
-  {
-    bundle.shots.map((s) => (
-      <section class="card shot-card">
-        <header class="shot-head">
-          <span class="mono shot-pos">{s.position}</span>
-          <b>{s.label ?? `Shot ${s.position}`}</b>
-          {s.style_override_id && (
-            <em class="chip style-chip">{styleNames.get(s.style_override_id) ?? 'own style'}</em>
-          )}
-        </header>
-        <form method="post" class="shot-edit">
-          <input type="hidden" name="action" value="edit-shot" />
-          <input type="hidden" name="shot" value={s.id} />
-          <label class="field"><span>Label</span><input type="text" name="label" value={s.label ?? ''} /></label>
-          <label class="field"><span>What is happening — never a medium, never a palette</span>
-            <textarea name="prompt">{s.prompt}</textarea></label>
-          <div class="row">
-            <button class="btn small" type="submit"><Icon name="save" />Save</button>
-            <button class="btn small ghost" type="submit" name="action" value="suggest"
-              data-running="Writing…"><Icon name="cowrite" />Co-write 4 variants</button>
-            <button class="btn small ghost" type="submit" name="action" value="delete-shot"
-              data-confirm="sure? hold to delete"><Icon name="delete" />Delete</button>
-          </div>
-        </form>
-        {suggestFor === s.id && suggestions.length > 0 && (
-          <div class="suggestions" id="suggestions">
-            <p class="kicker"><span class="g">/</span>Co-writer — nothing changes until you approve one</p>
-            {suggestions.map((v) => (
-              <div class="suggestion">
-                <p>{v}</p>
-                <form method="post">
-                  <input type="hidden" name="action" value="edit-shot" />
-                  <input type="hidden" name="shot" value={s.id} />
-                  <input type="hidden" name="label" value={s.label ?? ''} />
-                  <input type="hidden" name="prompt" value={v} />
-                  <button class="btn small" type="submit" title="Replace the prompt with this variant">
-                    <Icon name="save" />Use this</button>
-                </form>
-                <form method="post">
-                  <input type="hidden" name="action" value="edit-shot" />
-                  <input type="hidden" name="shot" value={s.id} />
-                  <input type="hidden" name="label" value={s.label ?? ''} />
-                  <input type="hidden" name="prompt" value={`${s.prompt}\n${v}`} />
-                  <button class="btn small ghost" type="submit" title="Keep the prompt, add this line under it">
-                    <Icon name="add" />Append</button>
-                </form>
-              </div>
-            ))}
-          </div>
-        )}
-        <div class="style-block">
-          <p class="mini-label">Style — this shot only; picking one never touches existing takes</p>
-          <form method="post" class="style-strip-form">
-            <input type="hidden" name="action" value="set-style" />
-            <input type="hidden" name="shot" value={s.id} />
-            <div class="style-strip">
-              <label class="style-opt">
-                <input type="radio" name="style" value="" checked={!s.style_override_id} />
-                {proofThumb.has(bundle.style.id) ? (
-                  <img src={`/img/${proofThumb.get(bundle.style.id)}`} alt="" loading="lazy" />
-                ) : (
-                  <span class="style-ph">{bundle.style.name}</span>
-                )}
-                <span class="style-opt-name">project · {bundle.style.name}</span>
-              </label>
-              {styles.results.map((st) => (
-                <label class="style-opt">
-                  <input type="radio" name="style" value={st.id} checked={st.id === s.style_override_id} />
-                  {proofThumb.has(st.id) ? (
-                    <img src={`/img/${proofThumb.get(st.id)}`} alt="" loading="lazy" />
-                  ) : (
-                    <span class="style-ph">{st.name}</span>
-                  )}
-                  <span class="style-opt-name">{st.name}{st.team_kind === 'house' ? ' · house' : ''}</span>
-                </label>
-              ))}
-            </div>
-          </form>
-        </div>
-      </section>
-    ))
-  }
-
-  <section class="card add-shot">
-    <header class="shot-head"><b>Add a shot</b></header>
-    <form method="post">
-      <input type="hidden" name="action" value="add-shot" />
-      <label class="field"><span>Label</span><input type="text" name="label" placeholder="optional" /></label>
-      <label class="field"><span>What is happening</span><textarea name="prompt" required></textarea></label>
-      <button class="btn small" type="submit"><Icon name="add" />Add shot</button>
-    </form>
-  </section>
-
-  <section class="card refs-card">
-    <header class="shot-head"><b>Reference photos — these apply to EVERY shot in this project</b>
-      <span class="sub-inline">models stay faithful to them; single-reference models only ever see the first one</span>
-    </header>
-    {
-      refs.results.length > 0 && (
-        <div class="ref-strip">
-          {refs.results.map((r) => (
-            <figure class="ref-thumb">
-              <img src={`/img/${r.r2_key}`} alt={r.name ?? r.filename} loading="lazy" />
-              <figcaption>
-                <span class="ref-name" title={r.filename}>{r.name ?? r.filename}</span>
-                <span class="mono faint">{r.width}×{r.height}</span>
-                <form method="post">
-                  <input type="hidden" name="action" value="remove-ref" />
-                  <input type="hidden" name="ref" value={r.id} />
-                  <button class="btn small ghost" type="submit">Remove</button>
-                </form>
-              </figcaption>
-            </figure>
-          ))}
-        </div>
-      )
-    }
-    <form method="post" enctype="multipart/form-data" class="ref-upload">
-      <input type="hidden" name="action" value="upload-refs" />
-      <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required data-jpeg />
-      <button class="btn small" type="submit" data-running="Uploading…"><Icon name="upload" />Upload</button>
-    </form>
-    {
-      library.length > 0 && (
-        <div class="lib-attach">
-          <p class="kicker"><span class="g">/</span>From the <a href="/media">media library</a></p>
-          <div class="ref-strip lib-scroll">
-            {library.map((r) => (
-              <figure class="ref-thumb">
-                <img src={`/img/${r.r2_key}`} alt={r.name ?? r.filename} loading="lazy" />
-                <figcaption>
-                  <span class="ref-name" title={r.filename}>{r.name ?? r.filename}</span>
-                  <span class="mono faint">{r.width}×{r.height}</span>
-                  <form method="post">
-                    <input type="hidden" name="action" value="attach-ref" />
-                    <input type="hidden" name="ref" value={r.id} />
-                    <button class="btn small" type="submit">Attach</button>
-                  </form>
-                </figcaption>
-              </figure>
-            ))}
-          </div>
-        </div>
-      )
-    }
-    {
-      refs.results.length > 0 && (
-        <form method="post" class="ref-role">
-          <input type="hidden" name="action" value="ref-role" />
-          <label class="field">
-            <span>Who is the reference person in the scene? Needed whenever a scene has more than one person — models guess, and they guess differently.</span>
-            <input type="text" name="ref_role" value={bundle.project.ref_role ?? ''} placeholder='e.g. "the interviewer"' />
-          </label>
-          <button class="btn small ghost" type="submit">Save role</button>
-        </form>
-      )
-    }
-  </section>
-
-  <form method="post" class="run-bar">
-    <input type="hidden" name="action" value="run" />
-    <button class="btn" type="submit" disabled={!bundle.shots.length} data-running="Starting the run…">
-      <Icon name="run" />Run {bundle.shots.length} shot{bundle.shots.length === 1 ? '' : 's'} · estimated {microsToUsd(estimate)}{estTime ? ` · ${estTime}` : ''}
-    </button>
-  </form>
+  <Workspace client:load initial={initial} />
 </Base>
-
-<script is:inline>
-  // The style strip saves on pick — no Set button.
-  document.querySelectorAll('.style-strip-form input[type=radio]').forEach((r) =>
-    r.addEventListener('change', () => r.form.requestSubmit()),
-  );
-  // Fresh co-write suggestions land mid-page — bring them into view. Re-run
-  // just after load: same-URL POSTs get the browser's scroll restored AFTER
-  // parse, which would silently undo the first scroll.
-  const showSuggestions = () => document.getElementById('suggestions')?.scrollIntoView({ block: 'center' });
-  showSuggestions();
-  addEventListener('load', () => setTimeout(showSuggestions, 60));
-</script>
-
-<style>
-  .shot-head { display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap; }
-  .style-chip {
-    font: 700 0.62rem/1 var(--font-label); letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--accent); border: 1px solid var(--accent); border-radius: 999px;
-    padding: 0.18rem 0.5rem; font-style: normal;
-  }
-  .ref-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 6rem; }
-  .suggestions {
-    border: 1px solid var(--accent); border-radius: var(--radius);
-    margin-top: 1rem; padding: 1rem;
-  }
-  .suggestions .kicker { margin-bottom: 0.7rem; }
-  .suggestion { display: flex; gap: 0.8rem; align-items: flex-start; margin-bottom: 0.8rem; }
-  .suggestion p { flex: 1; color: var(--mute); font-size: 0.92rem; }
-  .suggestion .btn { flex: none; white-space: nowrap; }
-
-  /* per-shot style strip: pick by preview, saves on click */
-  .style-block { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 0.8rem; }
-  .mini-label {
-    font: 700 0.69rem/1 var(--font-label); letter-spacing: 0.16em; text-transform: uppercase;
-    color: var(--faint); margin-bottom: 0.55rem;
-  }
-  .style-strip { display: flex; gap: 0.6rem; overflow-x: auto; padding-bottom: 0.4rem; }
-  .style-opt {
-    flex: none; width: 8.5rem; cursor: pointer; display: grid; gap: 0.3rem;
-    border: 1px solid var(--line); border-radius: var(--radius); padding: 0.35rem;
-  }
-  .style-opt:has(input:checked) { border-color: var(--accent); }
-  .style-opt input { position: absolute; opacity: 0; }
-  .style-opt img { width: 100%; height: 4.2rem; object-fit: cover; border-radius: calc(var(--radius) - 2px); display: block; }
-  .style-ph {
-    height: 4.2rem; display: grid; place-items: center; text-align: center;
-    background: var(--surface-2); border-radius: calc(var(--radius) - 2px);
-    color: var(--faint); font-size: 0.7rem; padding: 0.3rem; overflow: hidden;
-  }
-  .style-opt-name {
-    font-size: 0.72rem; color: var(--mute); overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap;
-  }
-  .style-opt:has(input:checked) .style-opt-name { color: var(--accent); font-weight: 700; }
-  .shot-pos { color: var(--faint); font-weight: 700; }
-  .shot-edit, .add-shot form { margin-top: 1rem; }
-  .row { display: flex; gap: 0.6rem; }
-  .refs-card { margin-top: 1.5rem; }
-  .sub-inline { color: var(--faint); font-size: 0.8rem; font-weight: 400; }
-  .ref-strip { display: flex; gap: 0.8rem; flex-wrap: wrap; margin: 1rem 0; }
-  .ref-thumb { width: 9.5rem; }
-  .ref-thumb img { width: 100%; height: 7rem; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--line); }
-  .ref-thumb figcaption { display: flex; justify-content: space-between; align-items: center; margin-top: 0.3rem; font-size: 0.72rem; }
-  .ref-upload { display: flex; gap: 0.8rem; align-items: center; margin-top: 1rem; }
-  .ref-upload input[type=file] { flex: 1; background: none; border: 0; padding: 0; color: var(--mute); font-size: 0.85rem; }
-  .ref-role { margin-top: 1rem; }
-  .lib-attach { margin-top: 1.2rem; border-top: 1px solid var(--line); padding-top: 1rem; }
-  .lib-attach .kicker { margin-bottom: 0.7rem; }
-  .lib-scroll { max-height: 16rem; overflow-y: auto; }
-  .add-shot { margin-top: 1.5rem; }
-  .run-bar { margin-top: 2rem; }
-</style>

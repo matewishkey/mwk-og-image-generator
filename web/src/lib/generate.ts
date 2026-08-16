@@ -203,19 +203,37 @@ export async function generateLayouts(
 }
 
 const SHOT_SYSTEM = `You are a co-writer for image-generation shot prompts on branded share cards.
-A shot says WHAT IS HAPPENING — the scene, the subjects, the action, the telling detail.
-It must NEVER specify a medium, palette, lighting or camera: the style axis carries those,
-and a shot that mentions them breaks the whole comparison grid.
+The user gives you a short, rough idea. Your job is to EXPAND it into a full production
+prompt — 100 to 180 words — that a text-to-image model can execute richly: the concrete
+scene, who is in it, what exactly they are doing, the staging and spatial layout
+(foreground, midground, background), and the telling details that carry the idea.
+
+A shot says WHAT IS HAPPENING and nothing else. It must NEVER specify a medium, palette,
+lighting, camera, lens or rendering style: the style axis carries those, and a shot that
+mentions them breaks the whole comparison grid. Rich scene, zero art direction.
+
+If the idea contains a token like {shot 1}, that is a machine reference to another shot's
+character — keep every such token EXACTLY as written, verbatim, wherever the character it
+names appears in your text. Never expand or describe the token.
 
 Return ONLY a JSON array of strings, no prose, no fence. Each string is a complete
-replacement shot prompt: same core idea, sharper scene. Vary the telling detail and the
-staging between variants; keep each under 60 words.
+replacement prompt written out long. Vary the staging and the telling details between
+variants — they should feel like three different stagings of the same idea.
 Never introduce trademarked characters, brands or logos — image models refuse them at
 render time, and a refused take is money spent on nothing.`;
 
 export async function suggestShotVariants(
   env: Env,
-  o: { current: string; projectName: string; otherShots: string[]; n: number },
+  o: {
+    current: string;
+    projectName: string;
+    otherShots: string[];
+    n: number;
+    /** Reference photos exist on this shot — the expansion may lean on "the reference person". */
+    hasRefs?: boolean;
+    /** Who the reference person is in the scene, when set on the shot/project. */
+    refRole?: string;
+  },
 ): Promise<string[]> {
   const raw = await askEngine(env, {
     system: SHOT_SYSTEM,
@@ -224,7 +242,12 @@ export async function suggestShotVariants(
       (o.otherShots.length
         ? `Other shots in the series (for tone, do not repeat them):\n${o.otherShots.map((s) => `- ${s}`).join('\n')}\n`
         : '') +
-      `\nCurrent shot prompt:\n"${o.current}"\n\nPropose ${o.n} improved variants.`,
+      (o.hasRefs
+        ? `Reference photos ride along with this shot; "the reference person" is a valid subject${
+            o.refRole ? ` — they are ${o.refRole}` : ''
+          }.\n`
+        : '') +
+      `\nThe idea to expand:\n"${o.current}"\n\nWrite ${o.n} expanded production prompts.`,
   });
   const items = extractJsonArray(raw);
   return items.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, o.n);

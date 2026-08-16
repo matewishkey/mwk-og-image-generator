@@ -321,7 +321,7 @@ async function takeAction(
     body: { action, take: takeId },
   });
   console.log(action === 'reroll' ? `✓ re-roll started (run ${r.runId})` : `✓ ${action}`);
-  console.log(studioUrl(`/projects/${slug}/takes`));
+  console.log(studioUrl(`/projects/${slug}/shots`));
 }
 
 export async function runStudio(argv: string[]): Promise<void> {
