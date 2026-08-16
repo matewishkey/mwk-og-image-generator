@@ -1,7 +1,8 @@
 ---
 import Base from '../layouts/Base.astro';
+import Icon from '../components/Icon.astro';
 import { ENV } from '../lib/runtime';
-import { listLibrary, renameReference, uploadReferences } from '../lib/media';
+import { deleteReference, listLibrary, renameReference, uploadReferences } from '../lib/media';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -11,9 +12,15 @@ let error = '';
 let note = '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  if (String(form.get('action') ?? '') === 'rename') {
+  const action = String(form.getAll('action').at(-1) ?? '');
+  if (action === 'rename') {
     const done = await renameReference(env, team.id, String(form.get('ref') ?? ''), String(form.get('name') ?? ''));
     if (done) note = 'Renamed.';
+  } else if (action === 'delete') {
+    const done = await deleteReference(env, team.id, String(form.get('ref') ?? ''));
+    note = done
+      ? 'Deleted and detached from every project. Uploading the same photo again brings it back.'
+      : 'Nothing deleted.';
   } else {
     const files = form.getAll('photos').filter((f): f is File => f instanceof File && f.size > 0);
     const outcome = await uploadReferences(env, team.id, files);
@@ -30,8 +37,9 @@ const refs = await listLibrary(env, team.id);
     <p class="kicker"><span class="g">/</span>Library</p>
     <h1>Media</h1>
     <p class="sub">
-      Reference photos, stored once per team and attachable to any project. The same
-      photo uploaded twice lands in the same slot.
+      Reference photos, stored once per team and attachable to any project. Uploads
+      convert to JPEG in your browser first — every model takes JPEG, and it uploads
+      4x faster. The same photo uploaded twice lands in the same slot.
     </p>
   </div>
 
@@ -39,28 +47,40 @@ const refs = await listLibrary(env, team.id);
   {note && <p class="flash">{note}</p>}
 
   <form method="post" enctype="multipart/form-data" class="card upload">
-    <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required />
-    <button class="btn small" type="submit">Upload</button>
+    <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required data-jpeg />
+    <button class="btn small" type="submit" data-running="Uploading…"><Icon name="upload" />Upload</button>
   </form>
 
-  <div class="lib-grid">
+  <div class="list">
     {
       refs.map((r) => (
-        <figure class="lib-item">
-          <a href={`/img/${r.r2_key}`} target="_blank">
-            <img src={`/img/${r.r2_key}`} alt={r.filename} loading="lazy" />
-          </a>
-          <figcaption>
+        <div class="list-row">
+          <span class="list-thumb">
+            <a href={`/img/${r.r2_key}`} target="_blank">
+              <img src={`/img/${r.r2_key}`} alt={r.name ?? r.filename} loading="lazy" />
+            </a>
+          </span>
+          <span class="list-body">
             <form method="post" class="rename">
               <input type="hidden" name="action" value="rename" />
               <input type="hidden" name="ref" value={r.id} />
               <input type="text" name="name" value={r.name ?? ''} placeholder={r.filename}
                 title="Name this image so it can be referred to by name" />
-              <button class="btn small ghost" type="submit">✓</button>
+              <button class="btn small ghost" type="submit"><Icon name="save" />Save name</button>
             </form>
-            <span class="mono faint">{r.width}×{r.height} · {r.uses} use{r.uses === 1 ? '' : 's'}</span>
-          </figcaption>
-        </figure>
+            <span class="list-meta mono">
+              {r.filename} · {r.width}×{r.height} · {r.uses} use{r.uses === 1 ? '' : 's'} · {r.created_at.slice(0, 10)}
+            </span>
+          </span>
+          <span class="list-actions">
+            <form method="post">
+              <input type="hidden" name="action" value="delete" />
+              <input type="hidden" name="ref" value={r.id} />
+              <button class="btn small ghost" type="submit" data-confirm="sure? hold to delete">
+                <Icon name="delete" />Delete</button>
+            </form>
+          </span>
+        </div>
       ))
     }
   </div>
@@ -70,12 +90,7 @@ const refs = await listLibrary(env, team.id);
 <style>
   .upload { display: flex; gap: 0.8rem; align-items: center; margin-bottom: 1.5rem; max-width: 40rem; }
   .upload input[type=file] { flex: 1; background: none; border: 0; color: var(--mute); font-size: 0.85rem; }
-  .lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 1rem; }
-  .lib-grid > * { min-width: 0; }
-  .lib-item img { width: 100%; height: 9rem; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--line); display: block; }
-  .lib-item figcaption { display: grid; gap: 0.25rem; margin-top: 0.35rem; font-size: 0.78rem; }
-  .rename { display: flex; gap: 0.3rem; }
-  .rename input[type=text] { font-size: 0.82rem; padding: 0.3rem 0.5rem; min-width: 0; }
-  .rename .btn { padding: 0.3rem 0.5rem; }
-  .faint { color: var(--faint); }
+  .rename { display: flex; gap: 0.4rem; max-width: 24rem; }
+  .rename input[type=text] { font-size: 0.85rem; padding: 0.35rem 0.55rem; min-width: 0; }
+  .rename .btn { white-space: nowrap; }
 </style>

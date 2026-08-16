@@ -177,6 +177,38 @@ const PROJECT_TABS = [
       })();
     </script>
     <script is:inline>
+      // Reference photos convert to JPEG in the browser before upload — every
+      // model takes JPEG, it's ~4x smaller than a phone PNG, and EXIF drops for
+      // free. An undecodable file passes through untouched; the server still
+      // accepts PNG/WebP, so this is an optimisation, never a gate.
+      document.querySelectorAll('input[type=file][data-jpeg]').forEach((inp) => {
+        inp.addEventListener('change', async () => {
+          const MAX = 2560;
+          const dt = new DataTransfer();
+          let changed = false;
+          for (const f of inp.files) {
+            try {
+              const bmp = await createImageBitmap(f);
+              const edge = Math.max(bmp.width, bmp.height);
+              if (f.type === 'image/jpeg' && edge <= MAX) { dt.items.add(f); continue; }
+              const scale = Math.min(1, MAX / edge);
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.round(bmp.width * scale);
+              canvas.height = Math.round(bmp.height * scale);
+              canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+              const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.9));
+              if (!blob) throw new Error('encode failed');
+              dt.items.add(new File([blob], f.name.replace(/\.[a-z4]+$/i, '') + '.jpg', { type: 'image/jpeg' }));
+              changed = true;
+            } catch {
+              dt.items.add(f);
+            }
+          }
+          if (changed) inp.files = dt.files;
+        });
+      });
+    </script>
+    <script is:inline>
       // Running state — anything that kicks background work shows it on the
       // button that started it. Disable on the NEXT tick so the submitter's
       // own name/value still posts with the form.

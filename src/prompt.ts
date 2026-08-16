@@ -37,6 +37,21 @@ function frameRules(allowText: boolean): string {
   return `${FRAME_BASE} ${allowText ? SOME_TEXT : NO_TEXT}`;
 }
 
+/**
+ * Ready-made values for the `extra` instruction — prompt-shaped, appended
+ * verbatim by compose(). They exist so the field suggests what it is FOR;
+ * free text remains just as valid.
+ */
+export const EXTRA_PRESETS: { label: string; text: string }[] = [
+  { label: 'Calm floor', text: 'Keep the bottom fifth of the frame calm and uncluttered.' },
+  { label: 'Clear headline space', text: 'Leave the upper third of the frame visually quiet.' },
+  { label: 'Single subject', text: 'One subject only, shallow depth of field, no background clutter.' },
+  { label: 'No people', text: 'No people anywhere in the frame.' },
+  { label: 'Muted background', text: 'Desaturate the background; the subject carries the colour.' },
+  { label: 'Daylight', text: 'Bright natural daylight, soft shadows.' },
+  { label: 'Night', text: 'Night-time mood, artificial light sources, deep shadows.' },
+];
+
 export interface ComposeOpts {
   style: Style;
   /** What is happening — the per-image idea. */

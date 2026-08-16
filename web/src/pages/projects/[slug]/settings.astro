@@ -4,6 +4,8 @@ import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import { MODELS } from '../../../../../src/models.ts';
+import { EXTRA_PRESETS } from '../../../../../src/prompt.ts';
+import { PROOFS_SLUG } from '../../../lib/proofs';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -63,6 +65,23 @@ if (Astro.request.method === 'POST') {
 }
 
 const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
+
+// Latest 'face' proof thumb per style — same preview the Shots strip shows.
+const proofThumbs = await env.DB.prepare(
+  `SELECT style_id, thumb_key FROM (
+     SELECT t.style_id, t.thumb_key,
+            row_number() OVER (PARTITION BY t.style_id ORDER BY t.created_at DESC) AS rn
+       FROM take t
+       JOIN run r ON r.id = t.run_id
+       JOIN project p ON p.id = r.project_id
+       JOIN shot sh ON sh.id = t.shot_id
+      WHERE p.team_id = ?1 AND p.slug = ?2
+        AND t.status = 'succeeded' AND t.thumb_key IS NOT NULL AND sh.label = 'face'
+   ) WHERE rn = 1`,
+)
+  .bind(team.id, PROOFS_SLUG)
+  .all<{ style_id: string; thumb_key: string }>();
+const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_key]));
 ---
 
 <Base title={`${bundle.project.name} · settings`} nav="projects" project={{ slug, name: bundle.project.name, active: 'settings' }}>
@@ -89,6 +108,7 @@ const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
         {styles.results.map((s) => (
           <label class="style-pick">
             <input type="radio" name="style" value={s.id} checked={s.id === bundle.project.default_style_id} />
+            {proofThumb.has(s.id) && <img class="style-pick-img" src={`/img/${proofThumb.get(s.id)}`} alt="" loading="lazy" />}
             <span class="style-head">
               <b>{s.name}</b>
               {s.team_kind === 'house' && <em class="chip">house</em>}
@@ -126,8 +146,25 @@ const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
         </label>
       </label>
     </div>
-    <label class="field"><span>Extra instruction appended to every prompt (optional)</span>
-      <input type="text" name="extra" value={bundle.project.extra ?? ''} /></label>
+    <div class="field">
+      <span>Extra instruction appended to every prompt (optional) — click a preset to add it</span>
+      <div class="preset-chips">
+        {EXTRA_PRESETS.map((p) => (
+          <button type="button" class="chip-btn" data-preset={p.text} title={p.text}>{p.label}</button>
+        ))}
+      </div>
+      <input type="text" name="extra" id="extra-input" value={bundle.project.extra ?? ''} />
+    </div>
+    <script is:inline>
+      document.querySelectorAll('.chip-btn[data-preset]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const inp = document.getElementById('extra-input');
+          const cur = inp.value.trim();
+          inp.value = cur ? `${cur} ${b.dataset.preset}` : b.dataset.preset;
+          inp.focus();
+        }),
+      );
+    </script>
     <div class="form-grid">
       <label class="field"><span>Band title — *word* renders red</span>
         <input type="text" name="title" value={bundle.project.title ?? ''} /></label>
@@ -155,6 +192,10 @@ const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
   }
   .style-pick:has(input:checked) { border-color: var(--accent); }
   .style-pick input { position: absolute; opacity: 0; }
+  .style-pick-img {
+    width: 100%; height: 4.5rem; object-fit: cover; display: block;
+    border-radius: calc(var(--radius) - 2px); border: 1px solid var(--line);
+  }
   .style-head { display: flex; align-items: baseline; gap: 0.5rem; }
   .style-pick:has(input:checked) .style-head b { color: var(--accent); }
   .style-desc { color: var(--faint); font-size: 0.8rem; line-height: 1.35; }
@@ -178,4 +219,12 @@ const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
   .model-good { color: var(--mute); }
   .model-weak { color: var(--faint); }
   .inline-check { display: flex; gap: 0.5rem; align-items: center; color: var(--mute); font-size: 0.92rem; padding-top: 0.4rem; }
+
+  .preset-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+  .chip-btn {
+    font: 700 0.72rem/1 var(--font-label); letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--mute); background: var(--surface); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0.35rem 0.7rem; cursor: pointer;
+  }
+  .chip-btn:hover { color: var(--accent); border-color: var(--accent); }
 </style>

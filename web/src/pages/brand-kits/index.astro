@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Icon from '../../components/Icon.astro';
 import { ENV } from '../../lib/runtime';
 import { ulid } from '../../lib/ulid';
 
@@ -72,33 +73,40 @@ const colorsOf = (config: string): KitColors => JSON.parse(config).colors;
   {error && <p class="flash">{error}</p>}
   {note && <p class="flash">{note}</p>}
 
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(24rem,1fr))">
+  <div class="list">
     {
       kits.results.map((k) => {
         const c = colorsOf(k.config);
         return (
-          <div class="card kit-card">
-            <p class="kicker"><span class="g">/</span>{k.team_kind === 'house' ? 'house' : 'yours'} · v{k.version}</p>
-            <h2><a href={`/brand-kits/${k.id}`}>{k.name}</a></h2>
-            {k.default_title && <p class="sub">“{k.default_title.replaceAll('*', '')}”</p>}
-            <div class="band-swatch" style={`background:${c.paper}`}>
-              <span class="sw-block" style={`background:${c.red}`}>
-                {k.mark_key && <img src={`/img/${k.mark_key}`} alt="" />}
+          <div class="list-row">
+            <span class="list-thumb kit-thumb">
+              <span class="band-swatch" style={`background:${c.paper}`}>
+                <span class="sw-block" style={`background:${c.red}`}>
+                  {k.mark_key && <img src={`/img/${k.mark_key}`} alt="" />}
+                </span>
+                <span class="sw-lines">
+                  <span class="sw-title" style={`background:${c.ink}`} />
+                  <span class="sw-tag" style={`background:${c.mute}`} />
+                </span>
+                <span class="sw-rule" style={`background:${c.red}`} />
               </span>
-              <span class="sw-lines">
-                <span class="sw-title" style={`background:${c.ink}`} />
-                <span class="sw-tag" style={`background:${c.mute}`} />
+            </span>
+            <span class="list-body">
+              <span class="list-name"><a href={`/brand-kits/${k.id}`}>{k.name}</a>
+                <em class="chip">{k.team_kind === 'house' ? 'house' : 'yours'}</em>
               </span>
-              <span class="sw-rule" style={`background:${c.red}`} />
-            </div>
-            <div class="row-actions">
-              <a class="btn small ghost" href={`/brand-kits/${k.id}`}>Open</a>
+              <span class="list-meta mono">
+                v{k.version}{k.default_title ? ` · “${k.default_title.replaceAll('*', '')}”` : ''}
+              </span>
+            </span>
+            <span class="list-actions">
+              <a class="btn small ghost" href={`/brand-kits/${k.id}`}><Icon name="watch" />Open</a>
               <form method="post">
                 <input type="hidden" name="action" value="duplicate" />
                 <input type="hidden" name="kit" value={k.id} />
-                <button class="btn small ghost" type="submit">Duplicate</button>
+                <button class="btn small ghost" type="submit"><Icon name="duplicate" />Duplicate</button>
               </form>
-            </div>
+            </span>
           </div>
         );
       })
@@ -107,19 +115,22 @@ const colorsOf = (config: string): KitColors => JSON.parse(config).colors;
 </Base>
 
 <style>
-  .kit-card h2 { font-size: 1.1rem; margin: 0.3rem 0; }
-  .kit-card h2 a { color: var(--ink); }
+  .kit-thumb { width: 11rem; }
+  .chip {
+    font: 700 0.6rem/1 var(--font-label); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--mute); border: 1px solid var(--line); border-radius: 999px;
+    padding: 0.15rem 0.45rem; font-style: normal; margin-left: 0.5rem;
+  }
   .band-swatch {
     position: relative;
-    display: flex; align-items: center; gap: 0.8rem;
-    border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 0.9rem 1rem; margin: 0.8rem 0;
+    display: flex; align-items: center; gap: 0.55rem;
+    border: 1px solid var(--line); border-radius: calc(var(--radius) - 2px);
+    padding: 0.65rem 0.7rem; height: 4.2rem;
   }
-  .sw-block { width: 2.6rem; aspect-ratio: 1; display: grid; place-items: center; flex: none; }
+  .sw-block { width: 1.9rem; aspect-ratio: 1; display: grid; place-items: center; flex: none; }
   .sw-block img { width: 64%; height: auto; }
-  .sw-lines { display: grid; gap: 0.45rem; flex: 1; }
-  .sw-title { height: 0.7rem; width: 62%; }
-  .sw-tag { height: 0.45rem; width: 42%; }
-  .sw-rule { position: absolute; inset: 0 0 auto 0; height: 3px; border-radius: var(--radius) var(--radius) 0 0; }
-  .row-actions { display: flex; gap: 0.5rem; }
+  .sw-lines { display: grid; gap: 0.35rem; flex: 1; }
+  .sw-title { height: 0.5rem; width: 62%; }
+  .sw-tag { height: 0.32rem; width: 42%; }
+  .sw-rule { position: absolute; inset: 0 0 auto 0; height: 3px; border-radius: calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0 0; }
 </style>

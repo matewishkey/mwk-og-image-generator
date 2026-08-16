@@ -1,6 +1,8 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Icon from '../../components/Icon.astro';
 import { ENV } from '../../lib/runtime';
+import { microsToUsd } from '../../lib/runs';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -9,7 +11,9 @@ if (!team) return new Response('No team', { status: 403 });
 const projects = await env.DB.prepare(
   `SELECT p.id, p.slug, p.name, p.description, p.updated_at,
           (SELECT count(*) FROM shot sh WHERE sh.project_id = p.id AND sh.deleted_at IS NULL) AS shots,
-          (SELECT count(*) FROM run r WHERE r.project_id = p.id) AS runs
+          (SELECT count(*) FROM run r WHERE r.project_id = p.id) AS runs,
+          coalesce((SELECT sum(c.usd_micros) FROM charge c JOIN run r ON r.id = c.run_id
+                     WHERE r.project_id = p.id), 0) AS spent
      FROM project p
     WHERE p.team_id = ?1 AND p.archived_at IS NULL
     ORDER BY p.updated_at DESC`,
@@ -23,7 +27,33 @@ const projects = await env.DB.prepare(
     updated_at: string;
     shots: number;
     runs: number;
+    spent: number;
   }>();
+
+// Preview thumb per project: the newest design render, else the newest
+// succeeded take. Two window-function queries, no N+1.
+const designThumbs = await env.DB.prepare(
+  `SELECT project_id, key FROM (
+     SELECT d.project_id, coalesce(d.thumb_key, d.r2_key) AS key,
+            row_number() OVER (PARTITION BY d.project_id ORDER BY d.created_at DESC) AS rn
+       FROM design d
+      WHERE d.team_id = ?1 AND d.status = 'succeeded' AND coalesce(d.thumb_key, d.r2_key) IS NOT NULL
+   ) WHERE rn = 1`,
+)
+  .bind(team.id)
+  .all<{ project_id: string; key: string }>();
+const takeThumbs = await env.DB.prepare(
+  `SELECT project_id, key FROM (
+     SELECT r.project_id, coalesce(t.thumb_key, t.card_key) AS key,
+            row_number() OVER (PARTITION BY r.project_id ORDER BY t.created_at DESC) AS rn
+       FROM take t JOIN run r ON r.id = t.run_id
+      WHERE r.team_id = ?1 AND t.status = 'succeeded' AND coalesce(t.thumb_key, t.card_key) IS NOT NULL
+   ) WHERE rn = 1`,
+)
+  .bind(team.id)
+  .all<{ project_id: string; key: string }>();
+const thumb = new Map(takeThumbs.results.map((r) => [r.project_id, r.key]));
+for (const r of designThumbs.results) thumb.set(r.project_id, r.key);
 ---
 
 <Base title="Projects" nav="projects">
@@ -32,30 +62,33 @@ const projects = await env.DB.prepare(
     <h1>Projects</h1>
   </div>
 
-  <p style="margin-bottom:1.5rem"><a class="btn" href="/projects/new">New project</a></p>
+  <p style="margin-bottom:1.5rem"><a class="btn" href="/projects/new"><Icon name="add" />New project</a></p>
 
   {
     projects.results.length === 0 ? (
       <p class="sub">Nothing yet. A project is one style, a set of models, and the shots you want.</p>
     ) : (
-      <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(20rem,1fr))">
+      <div class="list">
         {projects.results.map((p) => (
-          <a class="card project-card" href={`/projects/${p.slug}/shots`}>
-            <h2>{p.name}</h2>
-            <p class="sub">{p.description}</p>
-            <p class="mono meta">
-              {p.shots} shot{p.shots === 1 ? '' : 's'} · {p.runs} run{p.runs === 1 ? '' : 's'}
-            </p>
+          <a class="list-row" href={`/projects/${p.slug}/shots`}>
+            <span class="list-thumb">
+              {thumb.has(p.id) ? (
+                <img src={`/img/${thumb.get(p.id)}`} alt="" loading="lazy" />
+              ) : (
+                <span class="list-ph">no takes yet</span>
+              )}
+            </span>
+            <span class="list-body">
+              <span class="list-name">{p.name}</span>
+              {p.description && <span class="list-desc">{p.description}</span>}
+              <span class="list-meta mono">
+                {p.shots} shot{p.shots === 1 ? '' : 's'} · {p.runs} run{p.runs === 1 ? '' : 's'}
+                {p.spent > 0 ? ` · ${microsToUsd(p.spent)}` : ''} · {p.updated_at.slice(0, 10)}
+              </span>
+            </span>
           </a>
         ))}
       </div>
     )
   }
 </Base>
-
-<style>
-  .project-card { display: block; color: var(--ink); }
-  .project-card:hover { text-decoration: none; border-color: var(--accent); }
-  .project-card h2 { font-size: 1.15rem; margin-bottom: 0.35rem; }
-  .project-card .meta { font-size: 0.75rem; color: var(--faint); margin-top: 0.6rem; }
-</style>

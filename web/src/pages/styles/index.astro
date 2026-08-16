@@ -1,10 +1,11 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Icon from '../../components/Icon.astro';
 import { ENV } from '../../lib/runtime';
 import { ulid } from '../../lib/ulid';
-import { askEngine, extractJsonArray } from '../../lib/generate';
+import { askEngine } from '../../lib/generate';
 import { BRAINSTORM_SYSTEM, brainstormPrompt, parseBrainstorm } from '../../../../src/prompt.ts';
-import { runProofs } from '../../lib/proofs';
+import { runProofs, PROOFS_SLUG } from '../../lib/proofs';
 import type { StyleRow } from '../../lib/runs';
 
 const env = ENV;
@@ -27,9 +28,20 @@ const listStyles = () =>
 
 let styles = await listStyles();
 
+const proofedIds = async (): Promise<Set<string>> => {
+  const rows = await env.DB.prepare(
+    `SELECT DISTINCT t.style_id FROM take t
+       JOIN run r ON r.id = t.run_id JOIN project p ON p.id = r.project_id
+      WHERE p.team_id = ?1 AND p.slug = ?2 AND t.status = 'succeeded'`,
+  )
+    .bind(team.id, PROOFS_SLUG)
+    .all<{ style_id: string }>();
+  return new Set(rows.results.map((r) => r.style_id));
+};
+
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const action = String(form.get('action') ?? '');
+  const action = String(form.getAll('action').at(-1) ?? '');
   const nowIso = new Date().toISOString();
 
   if (action === 'brainstorm') {
@@ -75,7 +87,7 @@ if (Astro.request.method === 'POST') {
             }
           }
         }
-        note = `${saved} new style${saved === 1 ? '' : 's'} saved — proof sheets are rendering, open a style to watch.`;
+        note = `${saved} new style${saved === 1 ? '' : 's'} saved — proof sheets are rendering below.`;
       } catch (e) {
         error = (e as Error).message;
       }
@@ -100,9 +112,62 @@ if (Astro.request.method === 'POST') {
         }
       }
     }
+  } else if (action === 'proof') {
+    const src = styles.results.find((s) => s.id === String(form.get('style')));
+    if (src) {
+      const row = await env.DB.prepare(`SELECT * FROM style WHERE id = ?1`).bind(src.id).first<StyleRow>();
+      if (row) {
+        try {
+          await runProofs(env, { teamId: team.id, userId: user.id, style: row });
+          note = `Proofing "${row.name}" — thumbs land here in ~20 seconds. Reload to see them.`;
+        } catch (e) {
+          error = (e as Error).message;
+        }
+      }
+    }
+  } else if (action === 'proof-missing') {
+    const have = await proofedIds();
+    const missing = styles.results.filter((s) => !have.has(s.id));
+    let kicked = 0;
+    for (const s of missing) {
+      const row = await env.DB.prepare(`SELECT * FROM style WHERE id = ?1`).bind(s.id).first<StyleRow>();
+      if (row) {
+        try {
+          await runProofs(env, { teamId: team.id, userId: user.id, style: row });
+          kicked++;
+        } catch (e) {
+          error = (e as Error).message;
+          break;
+        }
+      }
+    }
+    note = kicked ? `Proofing ${kicked} style${kicked === 1 ? '' : 's'} — reload in ~30 seconds for the thumbs.` : 'Every style already has a proof sheet.';
   }
   styles = await listStyles();
 }
+
+// Latest face + scene proof thumb per style, one window query.
+const thumbRows = await env.DB.prepare(
+  `SELECT style_id, label, key FROM (
+     SELECT t.style_id, sh.label AS label, coalesce(t.thumb_key, t.card_key) AS key,
+            row_number() OVER (PARTITION BY t.style_id, sh.label ORDER BY t.created_at DESC) AS rn
+       FROM take t
+       JOIN run r ON r.id = t.run_id
+       JOIN project p ON p.id = r.project_id
+       JOIN shot sh ON sh.id = t.shot_id
+      WHERE p.team_id = ?1 AND p.slug = ?2 AND t.status = 'succeeded'
+        AND coalesce(t.thumb_key, t.card_key) IS NOT NULL AND sh.label IN ('face', 'scene')
+   ) WHERE rn = 1`,
+)
+  .bind(team.id, PROOFS_SLUG)
+  .all<{ style_id: string; label: string; key: string }>();
+const proofs = new Map<string, { face?: string; scene?: string }>();
+for (const r of thumbRows.results) {
+  const entry = proofs.get(r.style_id) ?? {};
+  entry[r.label as 'face' | 'scene'] = r.key;
+  proofs.set(r.style_id, entry);
+}
+const unproofed = styles.results.filter((s) => !proofs.has(s.id)).length;
 ---
 
 <Base title="Styles" nav="styles">
@@ -111,7 +176,8 @@ if (Astro.request.method === 'POST') {
     <h1>Styles</h1>
     <p class="sub">
       A style is a look — never a subject, never a scene. House styles are read-only;
-      duplicate one to make it yours.
+      duplicate one to make it yours. The thumbs are each style's proof sheet: the same
+      face and the same scene, so styles compare honestly.
     </p>
   </div>
 
@@ -127,39 +193,68 @@ if (Astro.request.method === 'POST') {
       <label class="field" style="max-width:7rem"><span>How many</span>
         <select name="n"><option>2</option><option selected>4</option><option>6</option><option>8</option></select></label>
     </div>
-    <button class="btn ghost" type="submit">Brainstorm</button>
+    <button class="btn ghost" type="submit" data-running="Brainstorming…"><Icon name="cowrite" />Brainstorm</button>
   </form>
 
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(24rem,1fr))">
+  {
+    unproofed > 0 && (
+      <form method="post" class="bulk-proof">
+        <input type="hidden" name="action" value="proof-missing" />
+        <button class="btn small ghost" type="submit" data-running="Proofing…">
+          <Icon name="run" />Render proof sheets for {unproofed} unproofed style{unproofed === 1 ? '' : 's'} · ~${(unproofed * 0.01).toFixed(2)}
+        </button>
+      </form>
+    )
+  }
+
+  <div class="list">
     {
-      styles.results.map((s) => (
-        <div class="card style-card">
-          <p class="kicker">
-            <span class="g">/</span>{s.team_kind === 'house' ? 'house' : s.origin === 'hand' ? 'yours' : 'generated'}
-          </p>
-          <h2><a href={`/styles/${s.id}`}>{s.name}</a></h2>
-          <p class="sub">{s.description}</p>
-          <p class="look">{s.look.slice(0, 180)}{s.look.length > 180 ? '…' : ''}</p>
-          <div class="row-actions">
-            <a class="btn small ghost" href={`/styles/${s.id}`}>Open</a>
-            <form method="post">
-              <input type="hidden" name="action" value="duplicate" />
-              <input type="hidden" name="style" value={s.id} />
-              <button class="btn small ghost" type="submit">Duplicate</button>
-            </form>
+      styles.results.map((s) => {
+        const p = proofs.get(s.id);
+        return (
+          <div class="list-row">
+            <span class="list-thumb proof-pair">
+              {p?.face ? <img src={`/img/${p.face}`} alt="" loading="lazy" /> : <span class="list-ph">no proof yet</span>}
+              {p?.scene ? <img src={`/img/${p.scene}`} alt="" loading="lazy" /> : <span class="list-ph">—</span>}
+            </span>
+            <span class="list-body">
+              <span class="list-name"><a href={`/styles/${s.id}`}>{s.name}</a>
+                <em class="chip">{s.team_kind === 'house' ? 'house' : s.origin === 'hand' ? 'yours' : 'generated'}</em>
+              </span>
+              <span class="list-desc">{s.description}</span>
+              <span class="list-meta">{s.look.slice(0, 140)}{s.look.length > 140 ? '…' : ''}</span>
+            </span>
+            <span class="list-actions">
+              <a class="btn small ghost" href={`/styles/${s.id}`}><Icon name="watch" />Open</a>
+              <form method="post">
+                <input type="hidden" name="action" value="duplicate" />
+                <input type="hidden" name="style" value={s.id} />
+                <button class="btn small ghost" type="submit"><Icon name="duplicate" />Duplicate</button>
+              </form>
+              <form method="post">
+                <input type="hidden" name="action" value="proof" />
+                <input type="hidden" name="style" value={s.id} />
+                <button class="btn small ghost" type="submit" data-running="Proofing…"
+                  title="Render the four reference prompts in this style · ~1¢"><Icon name="run" />Proof</button>
+              </form>
+            </span>
           </div>
-        </div>
-      ))
+        );
+      })
     }
   </div>
 </Base>
 
 <style>
-  .brainstorm { margin-bottom: 2rem; }
+  .brainstorm { margin-bottom: 1.2rem; }
   .brainstorm .row { display: flex; gap: 1rem; }
   .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
-  .style-card h2 { font-size: 1.1rem; margin: 0.3rem 0; }
-  .style-card .look { color: var(--faint); font-size: 0.85rem; margin: 0.6rem 0 0.8rem; }
-  .style-card h2 a { color: var(--ink); }
-  .row-actions { display: flex; gap: 0.5rem; }
+  .bulk-proof { margin-bottom: 1.2rem; }
+  .chip {
+    font: 700 0.6rem/1 var(--font-label); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--mute); border: 1px solid var(--line); border-radius: 999px;
+    padding: 0.15rem 0.45rem; font-style: normal; margin-left: 0.5rem;
+  }
+  .proof-pair { display: flex; gap: 0.3rem; width: 11rem; }
+  .proof-pair img, .proof-pair .list-ph { width: 5.35rem; height: 4.2rem; object-fit: cover; }
 </style>

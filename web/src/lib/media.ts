@@ -44,6 +44,12 @@ export async function uploadReferences(
     )
       .bind(ulid(), teamId, key, digest, file.name, info.mime, info.width, info.height, file.size, now)
       .run();
+    // Re-uploading bytes that were soft-deleted revives the existing row.
+    await env.DB.prepare(
+      `UPDATE reference SET deleted_at = NULL WHERE team_id=?1 AND sha256=?2 AND deleted_at IS NOT NULL`,
+    )
+      .bind(teamId, digest)
+      .run();
     const row = await env.DB.prepare(`SELECT id FROM reference WHERE team_id=?1 AND sha256=?2`)
       .bind(teamId, digest)
       .first<{ id: string }>();
@@ -69,11 +75,27 @@ export async function listLibrary(env: Env, teamId: string): Promise<LibraryRef[
   const rows = await env.DB.prepare(
     `SELECT r.id, r.r2_key, r.filename, r.name, r.width, r.height, r.created_at,
             (SELECT count(*) FROM reference_use u WHERE u.reference_id = r.id) AS uses
-       FROM reference r WHERE r.team_id = ?1 ORDER BY r.created_at DESC`,
+       FROM reference r WHERE r.team_id = ?1 AND r.deleted_at IS NULL
+      ORDER BY r.created_at DESC`,
   )
     .bind(teamId)
     .all<LibraryRef>();
   return rows.results;
+}
+
+/**
+ * Soft-delete a reference and detach it from every project. The R2 object and
+ * any design_panel rows pointing at it stay — nothing that ran disappears.
+ */
+export async function deleteReference(env: Env, teamId: string, refId: string): Promise<boolean> {
+  const r = await env.DB.prepare(
+    `UPDATE reference SET deleted_at = ?1 WHERE id = ?2 AND team_id = ?3 AND deleted_at IS NULL`,
+  )
+    .bind(new Date().toISOString(), refId, teamId)
+    .run();
+  if (r.meta.changes === 0) return false;
+  await env.DB.prepare(`DELETE FROM reference_use WHERE reference_id = ?1`).bind(refId).run();
+  return true;
 }
 
 export interface MarkInfo {

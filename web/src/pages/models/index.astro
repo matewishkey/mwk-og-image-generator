@@ -1,10 +1,34 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Icon from '../../components/Icon.astro';
 import { ENV } from '../../lib/runtime';
 import { MODELS, PRICES_VERIFIED_ON } from '../../../../src/models.ts';
+import { promoThumbs, runPromos, PROMO_PROMPT } from '../../lib/promos';
+import { estimateMicros, microsToUsd } from '../../lib/runs';
+
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
 
 const imageModels = MODELS.filter((m) => m.modality === 'image');
 const videoModels = MODELS.filter((m) => m.modality === 'video');
+
+let error = '';
+let note = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  if (String(form.getAll('action').at(-1) ?? '') === 'render-promos') {
+    try {
+      await runPromos(ENV, { teamId: team.id, userId: user.id });
+      note = 'Rendering the promo shot on every model — the slow ones take a minute. Reload for the thumbs.';
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+}
+
+const promos = await promoThumbs(ENV, team.id);
+const promoCost = estimateMicros(imageModels.map((m) => m.alias), null, 1, 0);
 
 // Latest observed facts from the nightly sync (append-only; may be empty pre-first-run).
 const catalog = await ENV.DB.prepare(
@@ -22,53 +46,70 @@ const fmtRuns = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3
     <p class="sub">
       Every slug, field name and price was read off the model's own Replicate page, not
       guessed. Prices last verified <span class="mono">{PRICES_VERIFIED_ON}</span>.
+      The thumbs are the same fixed prompt rendered by each model — an honest side-by-side.
     </p>
   </div>
 
+  {error && <p class="flash">{error}</p>}
+  {note && <p class="flash">{note}</p>}
+
+  <form method="post" class="promo-bar">
+    <input type="hidden" name="action" value="render-promos" />
+    <button class="btn small ghost" type="submit" data-running="Rendering promos…"
+      title={`"${PROMO_PROMPT}" once per model`}>
+      <Icon name="run" />{promos.size ? 'Re-render' : 'Render'} the promo shot on every model · {microsToUsd(promoCost)}
+    </button>
+  </form>
+
   <h2>Stills</h2>
-  <div class="model-table" role="table">
+  <div class="list">
     {
       imageModels.map((m) => (
-        <div class="model-row card">
-          <div class="m-id">
-            <span class="mono alias">{m.alias}</span>
-            <span class="label">{m.label}</span>
-            <span class="mono faint">{m.id}</span>
-          </div>
-          <div class="m-price mono">
-            {m.tiers.map((t) => (
-              <span>{t}: ${m.priceUsd[t]}</span>
-            ))}
-          </div>
-          <div class="m-refs mono faint">
-            {m.refStyle === 'none' ? 'no refs' : `${m.refStyle} · max ${m.maxRefs}`}
-            {m.seedable ? ' · seed' : ''}
-            {observed.get(m.id)?.run_count != null ? ` · ${fmtRuns(observed.get(m.id)!.run_count!)} runs` : ''}
-            {observed.get(m.id)?.model_updated_at ? ` · updated ${observed.get(m.id)!.model_updated_at!.slice(0, 10)}` : ''}
-          </div>
-          <p class="m-notes">{m.notes}</p>
+        <div class="list-row">
+          <span class="list-thumb">
+            {promos.has(m.alias) ? (
+              <img src={`/img/${promos.get(m.alias)}`} alt={`${m.alias} promo`} loading="lazy" />
+            ) : (
+              <span class="list-ph">no promo yet</span>
+            )}
+          </span>
+          <span class="list-body">
+            <span class="list-name">
+              <span class="mono alias">{m.alias}</span> {m.label}
+              <span class="mono faint id">{m.id}</span>
+            </span>
+            <span class="list-meta mono">
+              {m.tiers.map((t) => `${t}: $${m.priceUsd[t]}`).join(' · ')}
+              {m.typicalSeconds ? ` · ~${m.typicalSeconds}s` : ''}
+              {' · '}{m.refStyle === 'none' ? 'no refs' : `${m.refStyle} refs · max ${m.maxRefs}`}
+              {m.seedable ? ' · seed' : ''}
+              {observed.get(m.id)?.run_count != null ? ` · ${fmtRuns(observed.get(m.id)!.run_count!)} runs` : ''}
+            </span>
+            {m.goodFor && <span class="list-desc">+ {m.goodFor}</span>}
+            {m.weakFor && <span class="list-meta">− {m.weakFor}</span>}
+            <span class="list-desc">{m.notes}</span>
+          </span>
         </div>
       ))
     }
   </div>
 
   <h2>Video — phase 2, listed for the record</h2>
-  <div class="model-table">
+  <div class="list">
     {
       videoModels.map((m) => (
-        <div class="model-row card dimmed">
-          <div class="m-id">
-            <span class="mono alias">{m.alias}</span>
-            <span class="label">{m.label}</span>
-            <span class="mono faint">{m.id}</span>
-          </div>
-          <div class="m-price mono">
-            {m.tiers.map((t) => (
-              <span>{t}: ${m.priceUsd[t]}{m.priceUnit === 'second' ? '/s' : ''}</span>
-            ))}
-          </div>
-          <div class="m-refs mono faint">{m.audio ? 'audio' : 'silent'}</div>
-          <p class="m-notes">{m.notes}</p>
+        <div class="list-row dimmed">
+          <span class="list-body">
+            <span class="list-name">
+              <span class="mono alias">{m.alias}</span> {m.label}
+              <span class="mono faint id">{m.id}</span>
+            </span>
+            <span class="list-meta mono">
+              {m.tiers.map((t) => `${t}: $${m.priceUsd[t]}${m.priceUnit === 'second' ? '/s' : ''}`).join(' · ')}
+              {' · '}{m.audio ? 'audio' : 'silent'}
+            </span>
+            <span class="list-desc">{m.notes}</span>
+          </span>
         </div>
       ))
     }
@@ -77,13 +118,9 @@ const fmtRuns = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3
 
 <style>
   h2 { font-size: 1.25rem; margin: 1.6rem 0 1rem; }
-  .model-row { margin-bottom: 0.8rem; }
-  .model-row.dimmed { opacity: 0.65; }
-  .m-id { display: flex; gap: 0.8rem; align-items: baseline; flex-wrap: wrap; }
+  .promo-bar { margin-bottom: 0.4rem; }
+  .list-row.dimmed { opacity: 0.65; }
   .alias { font-weight: 700; color: var(--accent); }
-  .label { font-weight: 700; }
-  .faint { color: var(--faint); font-size: 0.8rem; }
-  .m-price { display: flex; gap: 1rem; font-size: 0.82rem; color: var(--mute); margin: 0.4rem 0; flex-wrap: wrap; }
-  .m-refs { font-size: 0.78rem; margin-bottom: 0.4rem; }
-  .m-notes { color: var(--mute); font-size: 0.88rem; max-width: var(--measure); }
+  .id { font-size: 0.72rem; margin-left: 0.5rem; }
+  .faint { color: var(--faint); }
 </style>

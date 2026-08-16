@@ -332,7 +332,7 @@ const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_k
     }
     <form method="post" enctype="multipart/form-data" class="ref-upload">
       <input type="hidden" name="action" value="upload-refs" />
-      <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required />
+      <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required data-jpeg />
       <button class="btn small" type="submit" data-running="Uploading…"><Icon name="upload" />Upload</button>
     </form>
     {
