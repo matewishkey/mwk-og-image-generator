@@ -1,6 +1,7 @@
 ---
 import '../styles/tokens.css';
 import '../styles/app.css';
+import Icon from '../components/Icon.astro';
 
 interface Props {
   title: string;
@@ -17,13 +18,13 @@ const { title, nav, project } = Astro.props;
 const user = Astro.locals.user;
 
 const NAV = [
-  { id: 'projects', label: 'Projects', href: '/projects' },
-  { id: 'styles', label: 'Styles', href: '/styles' },
-  { id: 'brand', label: 'Brand kits', href: '/brand-kits' },
-  { id: 'media', label: 'Media', href: '/media' },
-  { id: 'models', label: 'Models', href: '/models' },
-  { id: 'history', label: 'History', href: '/history' },
-  { id: 'team', label: 'Team', href: '/team' },
+  { id: 'projects', label: 'Projects', href: '/projects', icon: 'projects' },
+  { id: 'styles', label: 'Styles', href: '/styles', icon: 'style' },
+  { id: 'brand', label: 'Brand kits', href: '/brand-kits', icon: 'brand' },
+  { id: 'media', label: 'Media', href: '/media', icon: 'media' },
+  { id: 'models', label: 'Models', href: '/models', icon: 'model' },
+  { id: 'history', label: 'History', href: '/history', icon: 'history' },
+  { id: 'team', label: 'Team', href: '/team', icon: 'team' },
 ] as const;
 
 const PROJECT_TABS = [
@@ -62,7 +63,7 @@ const PROJECT_TABS = [
         <nav class="rail-nav">
           {NAV.map((n) => (
             <Fragment>
-              <a href={n.href} aria-current={nav === n.id ? 'page' : undefined}>{n.label}</a>
+              <a href={n.href} aria-current={nav === n.id ? 'page' : undefined}><Icon name={n.icon} />{n.label}</a>
               {n.id === 'projects' && project && (
                 <div class="rail-proj">
                   <a class="rail-proj-name" href={`/projects/${project.slug}/shots`}>{project.name}</a>
@@ -82,6 +83,7 @@ const PROJECT_TABS = [
         </nav>
         <div class="rail-foot">
           <button class="tt" id="theme-toggle" aria-label="Toggle theme" type="button">◐</button>
+          <a class="tt" href="/glossary" title="Glossary — every icon and term">?</a>
           <span class="rail-user" title={user.email}>{user.email}</span>
           <form method="post" action="/auth/logout"><button class="linkish" type="submit">Out</button></form>
         </div>
@@ -111,6 +113,84 @@ const PROJECT_TABS = [
         const next = el.dataset.theme === 'dark' ? 'light' : 'dark';
         el.dataset.theme = next;
         localStorage.setItem('theme', next);
+      });
+    </script>
+    <script is:inline>
+      // Hold-to-confirm — the house rule is NO popups. A button[data-confirm]
+      // never submits from a click: the first click arms it (label → "sure?"),
+      // and only a 1-second press-and-hold while armed fires the real submit.
+      (() => {
+        const HOLD_MS = 1000;
+        const disarm = (b) => {
+          clearTimeout(b._revert);
+          clearTimeout(b._hold);
+          b._hold = null;
+          b._armed = false;
+          b.classList.remove('arming', 'holding');
+          if (b._html != null) b.innerHTML = b._html; // restore label + icon
+        };
+        const startHold = (b) => {
+          if (b._hold) return;
+          b.classList.add('holding');
+          b._hold = setTimeout(() => {
+            b.classList.remove('holding');
+            b.form?.requestSubmit(b);
+          }, HOLD_MS);
+        };
+        const cancelHold = (b) => {
+          clearTimeout(b._hold);
+          b._hold = null;
+          b.classList.remove('holding');
+        };
+        const btnOf = (e) => (e.target instanceof Element ? e.target.closest('button[data-confirm]') : null);
+        document.addEventListener('click', (e) => {
+          const b = btnOf(e);
+          if (!b) return;
+          e.preventDefault();
+          if (b._armed) return;
+          b._armed = true;
+          b._html = b.innerHTML;
+          b.textContent = b.dataset.confirm || 'sure? hold';
+          b.classList.add('arming');
+          b._revert = setTimeout(() => disarm(b), 10000);
+        });
+        document.addEventListener('pointerdown', (e) => {
+          const b = btnOf(e);
+          if (b && b._armed) startHold(b);
+        });
+        for (const t of ['pointerup', 'pointerleave', 'pointercancel'])
+          document.addEventListener(t, (e) => {
+            const b = btnOf(e);
+            if (b) cancelHold(b);
+          }, true);
+        document.addEventListener('keydown', (e) => {
+          const b = btnOf(e);
+          if (b && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            if (b._armed && !e.repeat) startHold(b);
+          }
+        });
+        document.addEventListener('keyup', (e) => {
+          const b = btnOf(e);
+          if (b) cancelHold(b);
+        });
+      })();
+    </script>
+    <script is:inline>
+      // Running state — anything that kicks background work shows it on the
+      // button that started it. Disable on the NEXT tick so the submitter's
+      // own name/value still posts with the form.
+      document.addEventListener('submit', (e) => {
+        const b = e.submitter;
+        if (!(b instanceof HTMLButtonElement) || b.classList.contains('running')) return;
+        const w = b.offsetWidth;
+        setTimeout(() => {
+          b.style.minWidth = `${w}px`;
+          b.disabled = true;
+          b.classList.remove('arming', 'holding');
+          b.classList.add('running');
+          b.textContent = b.dataset.running || 'Working…';
+        });
       });
     </script>
   </body>

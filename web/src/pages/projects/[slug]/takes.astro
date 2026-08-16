@@ -1,8 +1,9 @@
 ---
 import Base from '../../../layouts/Base.astro';
+import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
-import { microsToUsd } from '../../../lib/runs';
+import { createRun, estimateMicros, loadProjectRefs, microsToUsd } from '../../../lib/runs';
 import { applyTakeAction } from '../../../lib/takes';
 import { sweepLeases } from '../../../lib/sweep';
 
@@ -16,10 +17,12 @@ await sweepLeases(env);
 const bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
 
+const models: string[] = JSON.parse(bundle.project.models);
+
 let error = '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const action = String(form.get('action'));
+  const action = String(form.getAll('action').at(-1) ?? '');
   if (action === 'pick' || action === 'hide' || action === 'unhide' || action === 'reroll') {
     const result = await applyTakeAction(env, {
       team,
@@ -30,6 +33,29 @@ if (Astro.request.method === 'POST') {
     });
     if ('ok' in result) return Astro.redirect(`/projects/${slug}/takes`);
     error = result.error;
+  } else if (action === 'run-all' || action === 'reshoot-shot') {
+    const shots =
+      action === 'run-all'
+        ? bundle.shots
+        : bundle.shots.filter((s) => s.id === String(form.get('shot') ?? ''));
+    if (!shots.length) error = 'Nothing to run.';
+    else {
+      try {
+        await createRun(env, {
+          teamId: team.id,
+          userId: user.id,
+          project: bundle.project,
+          style: bundle.style,
+          shots,
+          models,
+          iterations: bundle.project.iterations,
+          kind: action === 'run-all' ? 'full' : 'shot',
+        });
+        return Astro.redirect(`/projects/${slug}/takes`);
+      } catch (e) {
+        error = `The run could not start: ${(e as Error).message}`;
+      }
+    }
   }
 }
 
@@ -79,6 +105,13 @@ for (const t of takes.results) {
 const anyLive = takes.results.some((t) => ['queued', 'running', 'rendering'].includes(t.status));
 const throttledSeen = takes.results.some((t) => t.error_kind === 'throttled');
 const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
+
+// Run estimates, same maths as the Shots page: cells = shots × iterations.
+const refInfo = await loadProjectRefs(env, bundle.project.id);
+const fullEstimate = estimateMicros(
+  models, bundle.project.tier, bundle.shots.length * bundle.project.iterations, refInfo.megapixels,
+);
+const shotEstimate = estimateMicros(models, bundle.project.tier, bundle.project.iterations, refInfo.megapixels);
 ---
 
 <Base title={`${bundle.project.name} · takes`} nav="projects" project={{ slug, name: bundle.project.name, active: 'takes' }}>
@@ -90,6 +123,12 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
       {pickedCount}/{bundle.shots.length} picked. A re-roll is a new take — the old one is
       never overwritten.
     </p>
+    <form method="post" class="run-all">
+      <input type="hidden" name="action" value="run-all" />
+      <button class="btn" type="submit" disabled={!bundle.shots.length} data-running="Starting the run…">
+        <Icon name="run" />Run all {bundle.shots.length} shot{bundle.shots.length === 1 ? '' : 's'} · {microsToUsd(fullEstimate)}
+      </button>
+    </form>
   </div>
 
 
@@ -109,10 +148,20 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
       const hidden = all.filter((t) => t.hidden_at);
       return (
         <section class="shot-sheet">
-          <h2>
-            <span class="mono shot-pos">{shot.position}</span> {shot.label ?? `Shot ${shot.position}`}
-          </h2>
-          {all.length === 0 && <p class="sub">No takes yet — run the project from Shots.</p>}
+          <div class="sheet-head">
+            <h2>
+              <span class="mono shot-pos">{shot.position}</span> {shot.label ?? `Shot ${shot.position}`}
+            </h2>
+            <form method="post">
+              <input type="hidden" name="action" value="reshoot-shot" />
+              <input type="hidden" name="shot" value={shot.id} />
+              <button class="btn small ghost" type="submit" data-running="Starting…"
+                title="New takes of just this shot with today's prompt and style — the old ones stay">
+                <Icon name="reshoot" />Re-shoot · {microsToUsd(shotEstimate)}
+              </button>
+            </form>
+          </div>
+          {all.length === 0 && <p class="sub">No takes yet — run it from here or add more shots first.</p>}
           <div class="takes-grid">
             {visible.map((t) => (
               <figure
@@ -155,21 +204,21 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
                         <form method="post">
                           <input type="hidden" name="action" value="pick" />
                           <input type="hidden" name="take" value={t.id} />
-                          <button class="btn small" type="submit">Pick</button>
+                          <button class="btn small" type="submit"><Icon name="pick" />Pick</button>
                         </form>
                       )}
                       {!t.superseded && (
                         <form method="post">
                           <input type="hidden" name="action" value="reroll" />
                           <input type="hidden" name="take" value={t.id} />
-                          <button class="btn small ghost" type="submit">Re-roll</button>
+                          <button class="btn small ghost" type="submit" data-running="Rolling…"><Icon name="reroll" />Re-roll</button>
                         </form>
                       )}
                       {!t.picked && (
                         <form method="post">
                           <input type="hidden" name="action" value="hide" />
                           <input type="hidden" name="take" value={t.id} />
-                          <button class="btn small ghost" type="submit">Hide</button>
+                          <button class="btn small ghost" type="submit"><Icon name="hide" />Hide</button>
                         </form>
                       )}
                     </span>
@@ -190,7 +239,7 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
                       <form method="post">
                         <input type="hidden" name="action" value="unhide" />
                         <input type="hidden" name="take" value={t.id} />
-                        <button class="btn small ghost" type="submit">Unhide</button>
+                        <button class="btn small ghost" type="submit"><Icon name="watch" />Unhide</button>
                       </form>
                     </figcaption>
                   </figure>
@@ -237,7 +286,9 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
 
 <style>
   .shot-sheet { margin-bottom: 2.5rem; }
-  .shot-sheet h2 { font-size: 1.2rem; margin-bottom: 0.8rem; }
+  .sheet-head { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.8rem; flex-wrap: wrap; }
+  .sheet-head h2 { font-size: 1.2rem; }
+  .run-all { margin-top: 1rem; }
   .shot-pos { color: var(--faint); }
   .takes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 1rem; }
   .takes-grid > * { min-width: 0; }

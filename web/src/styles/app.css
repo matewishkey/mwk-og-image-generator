@@ -39,6 +39,9 @@ body.with-rail {
   color: var(--mute);
   padding: 0.62rem 1.1rem;
   border-left: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
 }
 .rail-nav > a:hover { color: var(--ink); text-decoration: none; }
 .rail-nav > a[aria-current='page'] { color: var(--accent); border-left-color: var(--accent); }
@@ -271,6 +274,40 @@ input[type='checkbox'] { accent-color: var(--red-field); }
 
 .mono { font-family: var(--font-mono); }
 .money { font: 700 0.85rem/1 var(--font-mono); color: var(--mute); }
+
+/* inline icons — 1em, stroke currentColor, never without a text label */
+svg.i { width: 1em; height: 1em; flex: none; vertical-align: -0.125em; }
+.btn svg.i { margin-right: 0.4em; }
+
+/* hold-to-confirm — armed shows the "sure?" label, holding fills the button
+   left-to-right as the 1-second progress. The second motion carve-out. */
+.btn.arming { position: relative; overflow: hidden; background: var(--red); color: var(--on-red); }
+.btn.ghost.arming { background: none; border-color: var(--red); color: var(--red); }
+.btn.arming::after {
+  content: '';
+  position: absolute;
+  inset: 0 100% 0 0;
+  background: color-mix(in srgb, currentColor 26%, transparent);
+}
+.btn.arming.holding::after { animation: hold-fill 1s linear forwards; }
+@keyframes hold-fill { to { inset: 0; } }
+
+/* running state — a sweeping sheen on the button that started the work */
+.btn.running {
+  position: relative;
+  overflow: hidden;
+  cursor: progress;
+  opacity: 0.85;
+}
+.btn.running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, currentColor 22%, transparent) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: btn-sweep 1.1s linear infinite;
+}
+@keyframes btn-sweep { to { transform: translateX(100%); } }
 
 /* flash messages */
 .flash {

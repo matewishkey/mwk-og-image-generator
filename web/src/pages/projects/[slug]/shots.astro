@@ -1,5 +1,6 @@
 ---
 import Base from '../../../layouts/Base.astro';
+import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { ulid } from '../../../lib/ulid';
 import { loadProject } from '../../../lib/data';
@@ -8,6 +9,7 @@ import { suggestShotVariants } from '../../../lib/generate';
 import { loadProjectRefs } from '../../../lib/runs';
 import { MODELS } from '../../../../../src/models.ts';
 import { listLibrary, uploadReferences } from '../../../lib/media';
+import { PROOFS_SLUG } from '../../../lib/proofs';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -31,7 +33,10 @@ let suggestFor = '';
 let suggestions: string[] = [];
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const action = String(form.get('action') ?? '');
+  // getAll().at(-1): the clicked button's action entry lands AFTER the form's
+  // hidden default. get() takes the FIRST entry, which silently ran edit-shot
+  // for every override button — the round-1 co-write/delete bug.
+  const action = String(form.getAll('action').at(-1) ?? '');
   const now = new Date().toISOString();
 
   if (action === 'add-shot') {
@@ -64,29 +69,11 @@ if (Astro.request.method === 'POST') {
         .bind(styleId || null, now, shotId)
         .run();
     }
-  } else if (action === 'reshoot') {
-    const shot = bundle.shots.find((s) => s.id === String(form.get('shot') ?? ''));
-    if (shot) {
-      try {
-        await createRun(env, {
-          teamId: team.id,
-          userId: user.id,
-          project: bundle.project,
-          style: bundle.style,
-          shots: [shot],
-          models: JSON.parse(bundle.project.models),
-          iterations: bundle.project.iterations,
-          kind: 'shot',
-        });
-        return Astro.redirect(`/projects/${slug}/takes`);
-      } catch (e) {
-        error = `The re-shoot could not start: ${(e as Error).message}`;
-      }
-    }
   } else if (action === 'edit-shot') {
     const shotId = String(form.get('shot') ?? '');
     const prompt = String(form.get('prompt') ?? '').trim();
-    if (prompt && bundle.shots.some((s) => s.id === shotId)) {
+    if (!prompt) error = 'The prompt can’t be empty — nothing was saved.';
+    else if (bundle.shots.some((s) => s.id === shotId)) {
       await env.DB.prepare(
         `UPDATE shot SET prompt=?1, label=?2, version=version+1, updated_at=?3 WHERE id=?4`,
       )
@@ -194,6 +181,23 @@ const estSeconds = measured.length ? Math.max(...measured) * Math.ceil(cells / 4
 const estTime =
   estSeconds === null ? '' : estSeconds < 90 ? `~${estSeconds}s` : `~${Math.round(estSeconds / 60)} min`;
 const styleNames = new Map(styles.results.map((s) => [s.id, s.name]));
+
+// Latest 'face' proof thumb per style — the preview in the per-shot style strip.
+const proofThumbs = await env.DB.prepare(
+  `SELECT style_id, thumb_key FROM (
+     SELECT t.style_id, t.thumb_key,
+            row_number() OVER (PARTITION BY t.style_id ORDER BY t.created_at DESC) AS rn
+       FROM take t
+       JOIN run r ON r.id = t.run_id
+       JOIN project p ON p.id = r.project_id
+       JOIN shot sh ON sh.id = t.shot_id
+      WHERE p.team_id = ?1 AND p.slug = ?2
+        AND t.status = 'succeeded' AND t.thumb_key IS NOT NULL AND sh.label = 'face'
+   ) WHERE rn = 1`,
+)
+  .bind(team.id, PROOFS_SLUG)
+  .all<{ style_id: string; thumb_key: string }>();
+const proofThumb = new Map(proofThumbs.results.map((r) => [r.style_id, r.thumb_key]));
 ---
 
 <Base title={bundle.project.name} nav="projects" project={{ slug, name: bundle.project.name, active: 'shots' }}>
@@ -218,19 +222,6 @@ const styleNames = new Map(styles.results.map((s) => [s.id, s.name]));
           {s.style_override_id && (
             <em class="chip style-chip">{styleNames.get(s.style_override_id) ?? 'own style'}</em>
           )}
-          <form method="post" class="style-override">
-            <input type="hidden" name="action" value="set-style" />
-            <input type="hidden" name="shot" value={s.id} />
-            <select name="style" title="Render this shot in its own style">
-              <option value="">project style — {bundle.style.name}</option>
-              {styles.results.map((st) => (
-                <option value={st.id} selected={st.id === s.style_override_id}>
-                  {st.name} {st.team_kind === 'house' ? '· house' : ''}
-                </option>
-              ))}
-            </select>
-            <button class="btn small ghost" type="submit">Set style</button>
-          </form>
         </header>
         <form method="post" class="shot-edit">
           <input type="hidden" name="action" value="edit-shot" />
@@ -239,29 +230,68 @@ const styleNames = new Map(styles.results.map((s) => [s.id, s.name]));
           <label class="field"><span>What is happening — never a medium, never a palette</span>
             <textarea name="prompt">{s.prompt}</textarea></label>
           <div class="row">
-            <button class="btn small" type="submit">Save</button>
-            <button class="btn small ghost" type="submit" name="action" value="suggest">Co-write 4 variants</button>
-            <button class="btn small ghost" type="submit" name="action" value="reshoot"
-              title="New takes of just this shot, with today's settings — old takes stay">Re-shoot</button>
+            <button class="btn small" type="submit"><Icon name="save" />Save</button>
+            <button class="btn small ghost" type="submit" name="action" value="suggest"
+              data-running="Writing…"><Icon name="cowrite" />Co-write 4 variants</button>
             <button class="btn small ghost" type="submit" name="action" value="delete-shot"
-              onclick="return confirm('Delete this shot?')">Delete</button>
+              data-confirm="sure? hold to delete"><Icon name="delete" />Delete</button>
           </div>
         </form>
         {suggestFor === s.id && suggestions.length > 0 && (
-          <div class="suggestions">
-            <p class="kicker"><span class="g">/</span>Co-writer — pick one or steal a line</p>
+          <div class="suggestions" id="suggestions">
+            <p class="kicker"><span class="g">/</span>Co-writer — nothing changes until you approve one</p>
             {suggestions.map((v) => (
-              <form method="post" class="suggestion">
-                <input type="hidden" name="action" value="edit-shot" />
-                <input type="hidden" name="shot" value={s.id} />
-                <input type="hidden" name="label" value={s.label ?? ''} />
-                <input type="hidden" name="prompt" value={v} />
+              <div class="suggestion">
                 <p>{v}</p>
-                <button class="btn small" type="submit">Use this</button>
-              </form>
+                <form method="post">
+                  <input type="hidden" name="action" value="edit-shot" />
+                  <input type="hidden" name="shot" value={s.id} />
+                  <input type="hidden" name="label" value={s.label ?? ''} />
+                  <input type="hidden" name="prompt" value={v} />
+                  <button class="btn small" type="submit" title="Replace the prompt with this variant">
+                    <Icon name="save" />Use this</button>
+                </form>
+                <form method="post">
+                  <input type="hidden" name="action" value="edit-shot" />
+                  <input type="hidden" name="shot" value={s.id} />
+                  <input type="hidden" name="label" value={s.label ?? ''} />
+                  <input type="hidden" name="prompt" value={`${s.prompt}\n${v}`} />
+                  <button class="btn small ghost" type="submit" title="Keep the prompt, add this line under it">
+                    <Icon name="add" />Append</button>
+                </form>
+              </div>
             ))}
           </div>
         )}
+        <div class="style-block">
+          <p class="mini-label">Style — this shot only; picking one never touches existing takes</p>
+          <form method="post" class="style-strip-form">
+            <input type="hidden" name="action" value="set-style" />
+            <input type="hidden" name="shot" value={s.id} />
+            <div class="style-strip">
+              <label class="style-opt">
+                <input type="radio" name="style" value="" checked={!s.style_override_id} />
+                {proofThumb.has(bundle.style.id) ? (
+                  <img src={`/img/${proofThumb.get(bundle.style.id)}`} alt="" loading="lazy" />
+                ) : (
+                  <span class="style-ph">{bundle.style.name}</span>
+                )}
+                <span class="style-opt-name">project · {bundle.style.name}</span>
+              </label>
+              {styles.results.map((st) => (
+                <label class="style-opt">
+                  <input type="radio" name="style" value={st.id} checked={st.id === s.style_override_id} />
+                  {proofThumb.has(st.id) ? (
+                    <img src={`/img/${proofThumb.get(st.id)}`} alt="" loading="lazy" />
+                  ) : (
+                    <span class="style-ph">{st.name}</span>
+                  )}
+                  <span class="style-opt-name">{st.name}{st.team_kind === 'house' ? ' · house' : ''}</span>
+                </label>
+              ))}
+            </div>
+          </form>
+        </div>
       </section>
     ))
   }
@@ -272,13 +302,13 @@ const styleNames = new Map(styles.results.map((s) => [s.id, s.name]));
       <input type="hidden" name="action" value="add-shot" />
       <label class="field"><span>Label</span><input type="text" name="label" placeholder="optional" /></label>
       <label class="field"><span>What is happening</span><textarea name="prompt" required></textarea></label>
-      <button class="btn small" type="submit">Add shot</button>
+      <button class="btn small" type="submit"><Icon name="add" />Add shot</button>
     </form>
   </section>
 
   <section class="card refs-card">
-    <header class="shot-head"><b>Reference photos</b>
-      <span class="sub-inline">models stay faithful to these; single-reference models only ever see the first</span>
+    <header class="shot-head"><b>Reference photos — these apply to EVERY shot in this project</b>
+      <span class="sub-inline">models stay faithful to them; single-reference models only ever see the first one</span>
     </header>
     {
       refs.results.length > 0 && (
@@ -303,7 +333,7 @@ const styleNames = new Map(styles.results.map((s) => [s.id, s.name]));
     <form method="post" enctype="multipart/form-data" class="ref-upload">
       <input type="hidden" name="action" value="upload-refs" />
       <input type="file" name="photos" accept="image/png,image/jpeg,image/webp" multiple required />
-      <button class="btn small" type="submit">Upload</button>
+      <button class="btn small" type="submit" data-running="Uploading…"><Icon name="upload" />Upload</button>
     </form>
     {
       library.length > 0 && (
@@ -344,27 +374,62 @@ const styleNames = new Map(styles.results.map((s) => [s.id, s.name]));
 
   <form method="post" class="run-bar">
     <input type="hidden" name="action" value="run" />
-    <button class="btn" type="submit" disabled={!bundle.shots.length}>
-      Run {bundle.shots.length} shot{bundle.shots.length === 1 ? '' : 's'} · estimated {microsToUsd(estimate)}{estTime ? ` · ${estTime}` : ''}
+    <button class="btn" type="submit" disabled={!bundle.shots.length} data-running="Starting the run…">
+      <Icon name="run" />Run {bundle.shots.length} shot{bundle.shots.length === 1 ? '' : 's'} · estimated {microsToUsd(estimate)}{estTime ? ` · ${estTime}` : ''}
     </button>
   </form>
 </Base>
 
+<script is:inline>
+  // The style strip saves on pick — no Set button.
+  document.querySelectorAll('.style-strip-form input[type=radio]').forEach((r) =>
+    r.addEventListener('change', () => r.form.requestSubmit()),
+  );
+  // Fresh co-write suggestions land mid-page — bring them into view.
+  document.getElementById('suggestions')?.scrollIntoView({ block: 'center' });
+</script>
+
 <style>
   .shot-head { display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap; }
-  .style-override { display: flex; gap: 0.4rem; align-items: center; margin-left: auto; }
-  .style-override select { width: auto; font-size: 0.82rem; padding: 0.35rem 0.5rem; }
   .style-chip {
     font: 700 0.62rem/1 var(--font-label); letter-spacing: 0.08em; text-transform: uppercase;
     color: var(--accent); border: 1px solid var(--accent); border-radius: 999px;
     padding: 0.18rem 0.5rem; font-style: normal;
   }
   .ref-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 6rem; }
-  .suggestions { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
+  .suggestions {
+    border: 1px solid var(--accent); border-radius: var(--radius);
+    margin-top: 1rem; padding: 1rem;
+  }
   .suggestions .kicker { margin-bottom: 0.7rem; }
-  .suggestion { display: flex; gap: 1rem; align-items: flex-start; margin-bottom: 0.8rem; }
+  .suggestion { display: flex; gap: 0.8rem; align-items: flex-start; margin-bottom: 0.8rem; }
   .suggestion p { flex: 1; color: var(--mute); font-size: 0.92rem; }
-  .suggestion .btn { flex: none; }
+  .suggestion .btn { flex: none; white-space: nowrap; }
+
+  /* per-shot style strip: pick by preview, saves on click */
+  .style-block { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 0.8rem; }
+  .mini-label {
+    font: 700 0.69rem/1 var(--font-label); letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--faint); margin-bottom: 0.55rem;
+  }
+  .style-strip { display: flex; gap: 0.6rem; overflow-x: auto; padding-bottom: 0.4rem; }
+  .style-opt {
+    flex: none; width: 8.5rem; cursor: pointer; display: grid; gap: 0.3rem;
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 0.35rem;
+  }
+  .style-opt:has(input:checked) { border-color: var(--accent); }
+  .style-opt input { position: absolute; opacity: 0; }
+  .style-opt img { width: 100%; height: 4.2rem; object-fit: cover; border-radius: calc(var(--radius) - 2px); display: block; }
+  .style-ph {
+    height: 4.2rem; display: grid; place-items: center; text-align: center;
+    background: var(--surface-2); border-radius: calc(var(--radius) - 2px);
+    color: var(--faint); font-size: 0.7rem; padding: 0.3rem; overflow: hidden;
+  }
+  .style-opt-name {
+    font-size: 0.72rem; color: var(--mute); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .style-opt:has(input:checked) .style-opt-name { color: var(--accent); font-weight: 700; }
   .shot-pos { color: var(--faint); font-weight: 700; }
   .shot-edit, .add-shot form { margin-top: 1rem; }
   .row { display: flex; gap: 0.6rem; }

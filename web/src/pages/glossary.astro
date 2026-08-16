@@ -1,0 +1,107 @@
+---
+import Base from '../layouts/Base.astro';
+import Icon from '../components/Icon.astro';
+
+if (!Astro.locals.user) return Astro.redirect('/auth/login');
+
+// Every icon in components/Icon.astro, with its meaning and where it appears.
+// Add an icon there → add a row here; the pair is the contract.
+const ICONS = [
+  { name: 'run', label: 'Run', means: 'Start rendering — a full run or a single shot. The price on the button is what it will cost.', where: 'Shots, Takes' },
+  { name: 'reshoot', label: 'Re-shoot', means: 'New takes of one shot with today’s prompt and style. The old takes stay on the contact sheet.', where: 'Takes' },
+  { name: 'reroll', label: 'Re-roll', means: 'One more take of the same cell. The old take is marked superseded, never deleted.', where: 'Takes' },
+  { name: 'pick', label: 'Pick', means: 'Mark a take as the chosen one for its shot. Picks feed the Design page.', where: 'Takes' },
+  { name: 'hide', label: 'Hide', means: 'Tuck a take away under the "hidden" fold. Nothing is deleted.', where: 'Takes' },
+  { name: 'watch', label: 'Preview', means: 'See it in context — the OG card as Slack/X/LinkedIn would show it.', where: 'Preview tab' },
+  { name: 'cowrite', label: 'Co-write', means: 'The AI drafts four prompt variants; you approve one (or append its best line). Nothing changes until you click Use.', where: 'Shots' },
+  { name: 'edit', label: 'Edit', means: 'Change a prompt, a label, a name. Saving bumps the version; past takes keep the exact prompt they were billed with.', where: 'Shots, Media, Styles' },
+  { name: 'delete', label: 'Delete', means: 'The only destructive icon. Never a popup: click once, the label turns to "sure?", then press and HOLD one second.', where: 'Shots, Media' },
+  { name: 'duplicate', label: 'Duplicate', means: 'Copy a house style or kit into your team so you can edit it. The original stays read-only.', where: 'Styles, Brand kits' },
+  { name: 'upload', label: 'Upload', means: 'Add reference photos or a brand mark. Photos convert to JPEG in your browser before upload.', where: 'Shots, Media, Brand kits' },
+  { name: 'download', label: 'Download', means: 'Save the rendered file.', where: 'Design' },
+  { name: 'add', label: 'Add', means: 'A new shot, style, project — appended, never replacing anything.', where: 'everywhere' },
+  { name: 'save', label: 'Save', means: 'Write the change. Versioned things (kits, shots) bump their version number.', where: 'forms' },
+  { name: 'template', label: 'Template', means: 'A saved layout — reusable across projects and formats.', where: 'Design' },
+  { name: 'pack', label: 'Pack link', means: 'A shareable page of the picked results.', where: 'Design' },
+  { name: 'projects', label: 'Projects', means: 'One campaign of shots — its takes, designs and settings.', where: 'rail' },
+  { name: 'style', label: 'Styles', means: 'A LOOK — medium, palette, lighting. Never a subject; the prompt carries what happens.', where: 'rail' },
+  { name: 'brand', label: 'Brand kits', means: 'Colors, faces and the mark that the band renders in. Tokens, not per-image choices.', where: 'rail' },
+  { name: 'media', label: 'Media', means: 'The team’s reference photo library.', where: 'rail' },
+  { name: 'model', label: 'Models', means: 'The image models — price, speed, strengths. Draft cheap, finish on gpt2.', where: 'rail' },
+  { name: 'history', label: 'History', means: 'Every run and every cent, newest first.', where: 'rail' },
+  { name: 'team', label: 'Team', means: 'Members and invites.', where: 'rail' },
+  { name: 'settings', label: 'Settings', means: 'Project-level knobs: style, models, iterations, extra instruction.', where: 'project tabs' },
+  { name: 'glossary', label: 'Glossary', means: 'This page.', where: 'rail foot' },
+] as const;
+
+const TERMS = [
+  ['Shot', 'One scene you want a picture of — "what is happening", written as a prompt. Shots are named ("Shot 1", or your label) and addressable by that name.'],
+  ['Take', 'One rendered image of one shot by one model. Takes are never overwritten: re-rolls supersede, hides tuck away, but everything that ran stays.'],
+  ['Run', 'One batch of takes — a full run covers every shot, a re-shoot covers one, a re-roll covers one cell. Every run is a row in History with its exact cost.'],
+  ['Pick', 'The chosen take for a shot. Picks are what the Design page composes into cards.'],
+  ['Style', 'A look: medium, palette, lighting, mood. A style never mentions a subject — that is the shot’s job. The two meet only at render time.'],
+  ['Style proof', 'Four fixed test prompts (a face, a scene, a crowd, a shopfront) rendered through a style on the cheapest model, so you can see what a style does before using it. ~4¢.'],
+  ['Brand kit', 'The band’s colors, faces and mark. House kits are read-only; duplicate one to edit. The kit reaches every rendered card and design.'],
+  ['Template / Layout', 'How a design arranges its panels, text and the brand band. Generated by AI or authored by hand; saved templates are reusable.'],
+  ['Collection', 'A set of designs rendered together across formats.'],
+  ['Pack', 'A shareable link bundling the picked results for someone outside the studio.'],
+  ['Reference photo', 'A photo the models stay faithful to (a real face, a real product). Applies to every shot in the project; single-reference models only see the first.'],
+  ['Ref role', 'Who the reference person IS in the scene ("the interviewer"). Needed when a scene has more than one person — models otherwise guess, and they guess differently.'],
+  ['Iteration', 'How many takes per shot per model in one run.'],
+  ['Finish', 'A deterministic polish pass on a design (grain, vignette, glow, fade) — applied after compositing, never an AI pass.'],
+  ['Superseded', 'A take replaced by a re-roll. It stays visible, dimmed, and is still pickable.'],
+] as const;
+---
+
+<Base title="Glossary" nav="projects">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>Glossary</p>
+    <h1>Icons &amp; vocabulary</h1>
+    <p class="sub">Every icon in the studio, what it does, and the words the pages use. Icons never appear without their text label.</p>
+  </div>
+
+  <section class="card">
+    <h2>Icons</h2>
+    <div class="gl-icons">
+      {ICONS.map((i) => (
+        <div class="gl-row">
+          <span class="gl-ic"><Icon name={i.name} /></span>
+          <div class="gl-body">
+            <b>{i.label}</b> <span class="gl-where mono">{i.where}</span>
+            <p>{i.means}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Vocabulary</h2>
+    <dl class="gl-terms">
+      {TERMS.map(([term, def]) => (
+        <div class="gl-term">
+          <dt>{term}</dt>
+          <dd>{def}</dd>
+        </div>
+      ))}
+    </dl>
+  </section>
+</Base>
+
+<style>
+  h2 { font-size: 1.15rem; margin-bottom: 1rem; }
+  .card + .card { margin-top: 1.5rem; }
+  .gl-icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr)); gap: 0.9rem 1.4rem; }
+  .gl-row { display: flex; gap: 0.8rem; align-items: flex-start; min-width: 0; }
+  .gl-ic {
+    flex: none; width: 2.1rem; height: 2.1rem; display: grid; place-items: center;
+    border: 1px solid var(--line); border-radius: var(--radius); color: var(--accent);
+    font-size: 1rem;
+  }
+  .gl-body { min-width: 0; font-size: 0.85rem; }
+  .gl-body p { color: var(--mute); margin-top: 0.15rem; line-height: 1.45; }
+  .gl-where { color: var(--faint); font-size: 0.68rem; margin-left: 0.4rem; }
+  .gl-terms { display: grid; grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr)); gap: 0.9rem 1.4rem; }
+  .gl-term dt { font-weight: 700; font-size: 0.9rem; }
+  .gl-term dd { color: var(--mute); font-size: 0.85rem; line-height: 1.45; margin-top: 0.15rem; }
+</style>

@@ -1,5 +1,6 @@
 ---
 import Base from '../../../layouts/Base.astro';
+import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import { createCollection, createDesign } from '../../../lib/design';
@@ -300,7 +301,7 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
       ) : (
         <form method="post">
           <input type="hidden" name="action" value="pack-link" />
-          <button class="btn small ghost" type="submit">Create pack link</button>
+          <button class="btn small ghost" type="submit"><Icon name="pack" />Create pack link</button>
         </form>
       )
     }
@@ -323,17 +324,17 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
               <form method="post">
                 <input type="hidden" name="action" value="all-formats" />
                 <input type="hidden" name="design" value={lead.id} />
-                <button class="btn small" type="submit">All {formats.results.length} formats · $0.00</button>
+                <button class="btn small" type="submit" data-running="Rendering…"><Icon name="run" />All {formats.results.length} formats · $0.00</button>
               </form>
-              <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}>Preview</a>
-              <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}>Download</a>
+              <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}><Icon name="watch" />Preview</a>
+              <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}><Icon name="download" />Download</a>
             </span>
             {lead.layout_team_id === team.id && (
               <form method="post" class="save-template">
                 <input type="hidden" name="action" value="save-template" />
                 <input type="hidden" name="design" value={lead.id} />
                 <input type="text" name="name" placeholder="save this layout as a template…" />
-                <button class="btn small ghost" type="submit">Save</button>
+                <button class="btn small ghost" type="submit"><Icon name="template" />Save</button>
               </form>
             )}
           </figcaption>
@@ -398,7 +399,7 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
           <label class="field"><span>Tagline (sentence below)</span>
             <input type="text" name="tagline" value={bundle.project.tagline ?? ''} /></label>
         </div>
-        <button class="btn" type="submit">Render · $0.00</button>
+        <button class="btn" type="submit" data-running="Rendering…"><Icon name="run" />Render · $0.00</button>
       </form>
     )
   }
@@ -431,7 +432,7 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
             </select>
           </label>
         </div>
-        <button class="btn ghost" type="submit">Generate layouts · under a cent</button>
+        <button class="btn ghost" type="submit" data-running="Designing — twenty seconds or so…"><Icon name="template" />Generate layouts · under a cent</button>
       </form>
     )
   }

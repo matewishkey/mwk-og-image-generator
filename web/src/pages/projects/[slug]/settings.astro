@@ -1,5 +1,6 @@
 ---
 import Base from '../../../layouts/Base.astro';
+import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import { MODELS } from '../../../../../src/models.ts';
@@ -135,7 +136,7 @@ const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
       <label class="field"><span>Tagline</span>
         <input type="text" name="tagline" value={bundle.project.tagline ?? ''} /></label>
     </div>
-    <button class="btn" type="submit">Save settings</button>
+    <button class="btn" type="submit"><Icon name="save" />Save settings</button>
   </form>
 </Base>
 
