@@ -107,12 +107,37 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
 - Finish presets (`design.effect`: grain/vignette/glow/fade) are deterministic sharp
   passes applied engine-side AFTER compositing (engine/container/effects.ts, metadata in
   src/effects.ts). Never an AI polish pass — same reason branding is composited.
+- **Layouts have two authoring levels, one schema, one renderer** (2026-08-16): preset
+  `archetype`s plus freeform `cells`/`texts`/`shapes`/`background`/`chipStyle`/`lockupBox`
+  in src/seam.ts. Colors in templates are brand TOKENS only, never hex — the rendering
+  kit resolves them. Use `layoutPanels(cfg)`, never index ARCHETYPE_PANELS directly
+  (archetype is optional now). The preset pixel maths in `placeRects` is FROZEN — the
+  freeform refactor shipped only after a 112-case harness proved every real layout
+  byte-identical; don't "clean it up". Hand-authoring: the design page author card,
+  POST `/api/projects/<slug>/designs`, or `studio design <slug> --config <file.json>`.
+- **Kits can carry uploaded faces**: `FontSpec.fileKey` (R2) + `family` parsed from the
+  file's own name table (web/src/lib/fonts.ts); the engine materialises it via
+  `localFont()` and rewrites `file` before rendering. Never hand-type a pango family —
+  a mismatch falls back to DejaVu with no error. The Tasman Visa kit (Sora SemiBold on
+  a navy band) is the living proof; the team also has an official-mark "Mate Wish Key"
+  kit beside the read-only house kit.
 - The build plan (final, reviewed): https://work.l/mat-mwk-og-image-generator/2026-08-14_plan/
 
 ## UI rules mate has set — don't regress these
 
 - **No accordions.** Everything visible, big pages are fine. (Shots page was
   details/summary once; buttons inside collapsed it and he called it out.)
+- **No popups, ever.** Destructive buttons use hold-to-confirm: `button[data-confirm]`
+  (Base.astro script) — first click arms it (label → "sure?"), a 1-second press-and-hold
+  fires. `confirm()` is banned.
+- **Running work shows on the button that started it** — the global submit listener
+  disables the submitter next-tick and swaps to its `data-running` label. Give every
+  slow action a `data-running`.
+- **Icons never appear without a text label**; the set is `components/Icon.astro`,
+  documented at `/glossary`. Add an icon → add its glossary row.
+- **Form-action dispatch is `form.getAll('action').at(-1)`**, never `get('action')` —
+  a hidden default before named submit buttons silently swallowed every override
+  (the round-1 co-write/delete bug).
 - **Nothing that ran ever disappears.** Superseded takes stay on the contact sheet,
   dimmed with a chip, still pickable. "The old one is never overwritten" is UI, not
   just schema.
@@ -144,6 +169,11 @@ lib/runs.ts) — change behaviour there, not in the routes.
   `engine/wrangler.jsonc` whenever the image changed, then `cd engine && wrangler deploy` with
   `CLOUDFLARE_DEPLOY_TOKEN` (td-sops) as CLOUDFLARE_API_TOKEN — the env token lacks Containers perms.
   `max_instances: 4` exists because drained instances hold slots for up to `sleepAfter`.
+  **Check the deploy diff shows a NEW image sha256.** wrangler can push a stale image
+  (main-7, 2026-08-16: "Image already exists remotely, skipping push" while the app kept the
+  old digest, and the fresh instance ran old code). If the digest only changes on a second
+  deploy, bump INSTANCE_NAME again — an instance that started before the digest changed
+  keeps serving the old image.
 - **After every deploy**: `cd web && TOKEN=<fresh login token> node tests/smoke.mjs` — a real
   Chromium pass against the live site. Mint the token by inserting a `login_token` row (SHA-256 of
   the token) via `wrangler d1 execute`.
