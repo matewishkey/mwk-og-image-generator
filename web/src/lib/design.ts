@@ -4,7 +4,7 @@
  */
 
 import {
-  ARCHETYPE_PANELS,
+  layoutPanels,
   LayoutConfigSchema,
   seamHeaders,
   type EngineRenderRequest,
@@ -45,7 +45,7 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
   if (!layout || !format || !kit) throw new Error('layout, format or brand kit missing');
 
   const cfg = LayoutConfigSchema.parse(JSON.parse(layout.config));
-  const needed = ARCHETYPE_PANELS[cfg.archetype];
+  const needed = layoutPanels(cfg);
   if (o.panels.length < needed) {
     throw new Error(`This layout needs ${needed} picks; the project has ${o.panels.length}.`);
   }
@@ -136,7 +136,7 @@ export async function createCollection(
   ]);
   if (!layout || !kit) throw new Error('layout or brand kit missing');
   const cfg = LayoutConfigSchema.parse(JSON.parse(layout.config));
-  const needed = ARCHETYPE_PANELS[cfg.archetype];
+  const needed = layoutPanels(cfg);
   if (o.panels.length < needed) {
     throw new Error(`This layout needs ${needed} picks; the project has ${o.panels.length}.`);
   }

@@ -1,7 +1,9 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Icon from '../../components/Icon.astro';
 import { ENV } from '../../lib/runtime';
 import { sniffMark } from '../../lib/media';
+import { parseFontName } from '../../lib/fonts';
 import { BrandConfigSchema, type BrandConfig } from '../../../../src/brand-config.ts';
 
 const env = ENV;
@@ -28,12 +30,76 @@ const editable = kit.team_kind !== 'house';
 let error = '';
 let note = '';
 
+type FontRole = 'title' | 'kicker' | 'tagline';
+const isFontRole = (r: string): r is FontRole => r === 'title' || r === 'kicker' || r === 'tagline';
+
 if (Astro.request.method === 'POST' && editable) {
   const form = await Astro.request.formData();
-  const action = String(form.get('action') ?? '');
+  const action = String(form.getAll('action').at(-1) ?? '');
   const now = new Date().toISOString();
 
-  if (action === 'mark') {
+  const saveConfig = async (draft: unknown, okNote: string) => {
+    const parsed = BrandConfigSchema.safeParse(draft);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]!;
+      error = `${issue.path.join('.')}: ${issue.message}`;
+      return;
+    }
+    await env.DB.prepare(
+      `UPDATE brand_kit SET config=?1, version=version+1, updated_at=?2 WHERE id=?3 AND team_id=?4`,
+    )
+      .bind(JSON.stringify(draft), now, kit!.id, team.id)
+      .run();
+    note = okNote;
+    kit = (await loadKit())!;
+  };
+
+  if (action === 'font') {
+    // Per-role uploaded face. The family is PARSED from the file's name table —
+    // pango silently falls back to DejaVu on a mismatch, so it is never typed.
+    const role = String(form.get('role') ?? '');
+    const file = form.get('fontfile');
+    if (!isFontRole(role)) error = 'Unknown font role.';
+    else if (!(file instanceof File) || file.size === 0) error = 'Pick a font file first.';
+    else if (file.size > 2 * 1024 * 1024) error = 'A font should be under 2 MB.';
+    else {
+      const bytes = await file.arrayBuffer();
+      const parsedName = parseFontName(bytes);
+      if (!parsedName)
+        error = 'That does not parse as a TTF/OTF. Use a static-instance file (variable axes are unreachable in the renderer anyway).';
+      else {
+        const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+        const ext = file.name.toLowerCase().endsWith('.otf') ? '.otf' : '.ttf';
+        const key = `teams/${team.id}/fonts/${digest}${ext}`;
+        await env.BUCKET.put(key, bytes, {
+          httpMetadata: { contentType: ext === '.otf' ? 'font/otf' : 'font/ttf' },
+        });
+        const cur = JSON.parse(kit.config) as BrandConfig;
+        await saveConfig(
+          { ...cur, [role]: { ...cur[role], family: parsedName.family, fileKey: key } },
+          `The ${role} face is now ${parsedName.family} ${parsedName.subfamily}.`,
+        );
+      }
+    }
+  } else if (action === 'font-reset') {
+    const role = String(form.get('role') ?? '');
+    if (isFontRole(role)) {
+      const house = await env.DB.prepare(
+        `SELECT b.config FROM brand_kit b JOIN team t ON t.id = b.team_id WHERE t.kind='house' LIMIT 1`,
+      ).first<{ config: string }>();
+      if (house) {
+        const hc = JSON.parse(house.config) as BrandConfig;
+        const cur = JSON.parse(kit.config) as BrandConfig;
+        const { fileKey: _drop, ...rest } = cur[role];
+        await saveConfig(
+          { ...cur, [role]: { ...rest, family: hc[role].family, file: hc[role].file } },
+          `The ${role} face is back to the house ${hc[role].family}.`,
+        );
+      }
+    }
+  } else if (action === 'mark') {
     const file = form.get('mark');
     if (file instanceof File && file.size > 0) {
       if (file.size > 1024 * 1024) error = 'A mark should be under 1 MB.';
@@ -208,7 +274,7 @@ const previewTitle = (kit.default_title ?? 'Your *Brand* Here').split(/\*([^*]+)
             <input type="number" name="logo.x" value={c.logo.x} min="0" max="400" /></label>
         </div>
 
-        <p class="kicker"><span class="g">/</span>Type — faces are fixed; sizes and weights are yours</p>
+        <p class="kicker"><span class="g">/</span>Type — sizes and weights here; upload a face per role on the right</p>
         <div class="form-grid">
           <label class="field"><span>Title size ({c.title.family})</span>
             <input type="number" name="title.size" value={c.title.size} min="8" max="120" /></label>
@@ -254,7 +320,39 @@ const previewTitle = (kit.default_title ?? 'Your *Brand* Here').split(/\*([^*]+)
         </form>
       )}
 
-      <p class="kicker" style="margin-top:2rem"><span class="g">/</span>Band preview — approximate; render a design for real pixels</p>
+      <p class="kicker" style="margin-top:2rem"><span class="g">/</span>Faces — per role, parsed from the file</p>
+      <div class="faces">
+        {(['title', 'kicker', 'tagline'] as const).map((role) => (
+          <div class="face-row">
+            <span class="face-role mono">{role}</span>
+            <span class="face-family">
+              {c[role].family}
+              {c[role].fileKey ? <em class="chip">uploaded</em> : <em class="chip faint-chip">house</em>}
+            </span>
+            {editable && (
+              <span class="face-actions">
+                <form method="post" enctype="multipart/form-data" class="face-upload">
+                  <input type="hidden" name="action" value="font" />
+                  <input type="hidden" name="role" value={role} />
+                  <input type="file" name="fontfile" accept=".ttf,.otf,font/ttf,font/otf" required />
+                  <button class="btn small ghost" type="submit" data-running="Parsing…"><Icon name="upload" />Set</button>
+                </form>
+                {c[role].fileKey && (
+                  <form method="post">
+                    <input type="hidden" name="action" value="font-reset" />
+                    <input type="hidden" name="role" value={role} />
+                    <button class="btn small ghost" type="submit"><Icon name="reroll" />House font</button>
+                  </form>
+                )}
+              </span>
+            )}
+          </div>
+        ))}
+        <p class="hint">TTF or OTF, under 2 MB, static instance (not variable). The family name is read
+          out of the file itself — a wrong name would silently render DejaVu.</p>
+      </div>
+
+      <p class="kicker" style="margin-top:2rem"><span class="g">/</span>Band preview — approximate; uploaded faces show at render time, not here</p>
       <div class="mock" style={`background:${c.colors.paper}`}>
         <div class="mock-band" style={`background:${c.colors.paper}; height:${(c.band.height / 630) * 100 * 2.4}px; border-top:${c.band.ruleHeight}px solid ${c.colors.red}`}>
           <span class="mock-block" style={`background:${c.colors.red}; width:${(c.logo.size / 630) * 100 * 2.4}px; margin-left:${(c.logo.x / 1200) * 100}%`}>
@@ -303,6 +401,19 @@ const previewTitle = (kit.default_title ?? 'Your *Brand* Here').split(/\*([^*]+)
   .mark-upload { display: grid; gap: 0.5rem; justify-items: start; }
   .mark-upload input[type=file] { background: none; border: 0; padding: 0; color: var(--mute); font-size: 0.85rem; }
   .hint { color: var(--faint); font-size: 0.78rem; }
+  .faces { display: grid; gap: 0.7rem; }
+  .face-row { display: flex; gap: 0.7rem; align-items: center; flex-wrap: wrap; }
+  .face-role { color: var(--faint); font-size: 0.72rem; text-transform: uppercase; width: 3.8rem; }
+  .face-family { font-weight: 700; font-size: 0.9rem; }
+  .chip {
+    font: 700 0.6rem/1 var(--font-label); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 999px;
+    padding: 0.14rem 0.4rem; font-style: normal; margin-left: 0.4rem;
+  }
+  .chip.faint-chip { color: var(--faint); border-color: var(--line); }
+  .face-actions { display: flex; gap: 0.5rem; align-items: center; margin-left: auto; flex-wrap: wrap; }
+  .face-upload { display: flex; gap: 0.4rem; align-items: center; }
+  .face-upload input[type=file] { background: none; border: 0; padding: 0; color: var(--mute); font-size: 0.78rem; max-width: 11rem; }
   .kit-side .kicker { margin-bottom: 0.8rem; }
   .mock { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; aspect-ratio: 1200/630; display: flex; align-items: flex-end; }
   .mock-band { width: 100%; display: flex; align-items: center; gap: 4%; }

@@ -4,7 +4,7 @@ import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import { createCollection, createDesign } from '../../../lib/design';
-import { ARCHETYPE_PANELS, LayoutConfigSchema } from '../../../../../src/seam.ts';
+import { layoutPanels, LayoutConfigSchema } from '../../../../../src/seam.ts';
 import { generateLayouts } from '../../../lib/generate';
 import { ulid } from '../../../lib/ulid';
 import { EFFECTS, isEffect } from '../../../../../src/effects.ts';
@@ -21,13 +21,17 @@ if (!bundle) return new Response('Not found', { status: 404 });
 
 // The inventory: this project's picks, in shot order, with their art.
 const picks = await env.DB.prepare(
-  `SELECT sh.id AS shot_id, sh.position, sh.label, t.id AS take_id, t.art_key, t.model_alias
+  `SELECT sh.id AS shot_id, sh.position, sh.label, t.id AS take_id, t.art_key, t.model_alias,
+          t.width, t.height
      FROM shot sh JOIN take t ON t.id = sh.picked_take_id
     WHERE sh.project_id = ?1 AND sh.deleted_at IS NULL AND t.art_key IS NOT NULL
     ORDER BY sh.position`,
 )
   .bind(bundle.project.id)
-  .all<{ shot_id: string; position: number; label: string | null; take_id: string; art_key: string; model_alias: string }>();
+  .all<{
+    shot_id: string; position: number; label: string | null; take_id: string; art_key: string;
+    model_alias: string; width: number | null; height: number | null;
+  }>();
 
 const layouts = await env.DB.prepare(
   `SELECT l.id, l.slug, l.name, l.config FROM layout l JOIN team t ON t.id = l.team_id
@@ -44,16 +48,29 @@ const formats = await env.DB.prepare(`SELECT id, slug, name, width, height FROM 
   height: number;
 }>();
 
+const kitConfig = await env.DB.prepare(`SELECT config FROM brand_kit WHERE id = ?1`)
+  .bind(bundle.project.brand_kit_id)
+  .first<{ config: string }>();
+const bandFracOf = (config?: string): number | undefined => {
+  try {
+    const c = JSON.parse(config ?? '') as { band?: { height?: number }; canvas?: { height?: number } };
+    return c.band?.height && c.canvas?.height ? c.band.height / c.canvas.height : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const usable = layouts.results.filter((l) => {
   const cfg = LayoutConfigSchema.safeParse(JSON.parse(l.config));
-  return cfg.success && ARCHETYPE_PANELS[cfg.data.archetype] <= picks.results.length;
+  return cfg.success && layoutPanels(cfg.data) <= picks.results.length;
 });
 
 let error = '';
+let authorDraft = '';
 let genNote = Astro.url.searchParams.get('gen') ?? '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const action = String(form.get('action') ?? 'render');
+  const action = String(form.getAll('action').at(-1) ?? 'render');
 
   if (action === 'pack-link') {
     // One unguessable token per project; creating it twice keeps the first.
@@ -116,10 +133,12 @@ if (Astro.request.method === 'POST') {
         {
           panels: picks.results.map((pk) => ({
             label: pk.label ?? `shot ${pk.position}`,
-            width: null,
-            height: null,
+            width: pk.width,
+            height: pk.height,
           })),
           format: fmtRow!,
+          palette: (JSON.parse(kitConfig?.config ?? '{}') as { colors?: Record<string, string> }).colors,
+          bandFrac: bandFracOf(kitConfig?.config),
         },
         brief,
         n,
@@ -192,6 +211,46 @@ if (Astro.request.method === 'POST') {
       if (r.meta.changes === 0) error = 'Only generated (team) layouts can be saved as templates.';
       else return Astro.redirect(`/projects/${slug}/design?gen=template+saved`);
     } else error = 'A template needs a name.';
+  } else if (action === 'author') {
+    // Hand-authored template: raw JSON -> validate -> new layout row -> render.
+    // Every iteration is a NEW layout (generated_by 'hand') — append-only history.
+    authorDraft = String(form.get('config') ?? '');
+    const name = String(form.get('name') ?? '').trim() || 'Hand-authored';
+    try {
+      const parsed = LayoutConfigSchema.safeParse(JSON.parse(authorDraft));
+      if (!parsed.success)
+        throw new Error(parsed.error.issues.map((i) => `${i.path.join('.') || 'config'}: ${i.message}`).join('; '));
+      const needs = layoutPanels(parsed.data);
+      if (needs > picks.results.length)
+        throw new Error(`this template needs ${needs} picks; the project has ${picks.results.length}`);
+      const layoutId = ulid();
+      await env.DB.prepare(
+        `INSERT INTO layout (id, team_id, slug, name, config, generated_by, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'hand', ?6, ?6)`,
+      )
+        .bind(layoutId, team.id, `${slugify(name) || 'tpl'}-${layoutId.slice(-6).toLowerCase()}`,
+              name, JSON.stringify(parsed.data), new Date().toISOString())
+        .run();
+      await createDesign(env, {
+        teamId: team.id,
+        userId: user.id,
+        projectId: bundle.project.id,
+        layoutId,
+        formatId: String(form.get('format') ?? 'fmt_og'),
+        brandKitId: bundle.project.brand_kit_id,
+        title: bundle.project.title ?? undefined,
+        kicker: bundle.project.kicker ?? undefined,
+        tagline: bundle.project.tagline ?? undefined,
+        panels: picks.results.map((pk) => ({
+          takeId: pk.take_id,
+          artKey: pk.art_key,
+          label: pk.label ?? undefined,
+        })),
+      });
+      return Astro.redirect(`/projects/${slug}/design`);
+    } catch (e) {
+      error = `Template: ${(e as Error).message}`;
+    }
   } else
   try {
     const chosen = form.getAll('formats').map(String);
@@ -438,6 +497,36 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
   }
 
   {
+    picks.results.length > 0 && (
+      <form method="post" class="design-form card author-form">
+        <input type="hidden" name="action" value="author" />
+        <p class="inventory mono">
+          Or author a template as raw JSON — full control: cells, texts, shapes, tokens.
+          The <a href="/glossary">glossary</a> names the vocabulary; colors are always brand
+          tokens (paper, ink, red, redDeep…), never hex.
+        </p>
+        <label class="field"><span>Template config (JSON)</span>
+          <textarea name="config" class="mono author-json" required
+            placeholder={'{"cells":[{"x":0,"y":0,"w":1,"h":1}],"lockup":"bottom"}'}
+          >{authorDraft}</textarea></label>
+        <div class="form-grid">
+          <label class="field"><span>Name</span>
+            <input type="text" name="name" placeholder="e.g. Off-centre hero" /></label>
+          <label class="field">
+            <span>Format</span>
+            <select name="format">
+              {formats.results.map((f) => (
+                <option value={f.id}>{f.name} · {f.width}×{f.height}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <button class="btn ghost" type="submit" data-running="Rendering…"><Icon name="edit" />Validate &amp; render · $0.00</button>
+      </form>
+    )
+  }
+
+  {
     versions.length > 0 && (
       <section class="versions">
         <p class="kicker"><span class="g">/</span>Versions — click one to lead</p>
@@ -483,6 +572,7 @@ const versions = designs.results.filter((d) => d.id !== lead?.id);
   }
   .fmt-pick:has(input:checked) { border-color: var(--accent); }
   .select-all { font-size: 0.68rem; letter-spacing: 0; text-transform: none; }
+  .author-json { min-height: 8rem; font-size: 0.82rem; }
   fieldset { border: 0; }
   .versions .kicker { margin-bottom: 0.8rem; }
   .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.9rem; }

@@ -10,6 +10,7 @@
  */
 
 import { parseArgs } from 'node:util';
+import { readFile } from 'node:fs/promises';
 
 const USAGE = `mwk-og studio — drive the live studio; results appear in the browser
 
@@ -31,6 +32,8 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
   reroll <slug> <takeId>       new take of the same shot+model; --watch
   hide <slug> <takeId>         hide a take (reversible: unhide)
   unhide <slug> <takeId>
+  design <slug> --config <file.json>   render a hand-authored template (cells/texts/shapes,
+                               colors as brand tokens); --name, --format <formatId>, --title/--kicker/--tagline
 
 env: MWK_STUDIO_TOKEN (required), MWK_STUDIO_URL (default https://og.matewishkey.com)`;
 
@@ -402,6 +405,44 @@ export async function runStudio(argv: string[]): Promise<void> {
     }
     case 'hide': await takeAction(needSlug(), needTake(), 'hide'); break;
     case 'unhide': await takeAction(needSlug(), needTake(), 'unhide'); break;
+    case 'design': {
+      const slug = needSlug();
+      const { values } = parseArgs({
+        args: rest.slice(1),
+        options: {
+          config: { type: 'string' },
+          name: { type: 'string' },
+          format: { type: 'string' },
+          title: { type: 'string' },
+          kicker: { type: 'string' },
+          tagline: { type: 'string' },
+        },
+      });
+      if (!values.config) fail('usage: mwk-og studio design <slug> --config <file.json>');
+      let config: unknown;
+      try {
+        config = JSON.parse(await readFile(values.config, 'utf8'));
+      } catch (e) {
+        fail(`could not read ${values.config}: ${(e as Error).message}`);
+      }
+      const r = await api<{ designId: string; url: string; image: string }>(
+        `/projects/${slug}/designs`,
+        {
+          method: 'POST',
+          body: {
+            config,
+            name: values.name,
+            formatId: values.format,
+            title: values.title,
+            kicker: values.kicker,
+            tagline: values.tagline,
+          },
+        },
+      );
+      console.log(`✓ rendered design ${r.designId}`);
+      console.log(studioUrl(r.url));
+      break;
+    }
     case undefined:
     case 'help':
     case '-h':

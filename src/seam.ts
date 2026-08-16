@@ -59,9 +59,108 @@ export interface EngineRunRequest {
 /**
  * A layout is DATA. A model can write one, a human can tweak one, and the engine
  * renders either for $0.00. Proven by the 20-variant prototype (2026-08-14).
+ *
+ * Two authoring levels share this one schema and one renderer:
+ * - PRESETS: `archetype` picks one of seven hand-tuned arrangements (their
+ *   pixel maths lives in the renderer and never changes shape).
+ * - FREEFORM: `cells` places 1-8 panels directly; `texts` and `shapes` add
+ *   typography and furniture. All geometry is 0-1 fractions of the canvas.
+ *
+ * Colors are always brand TOKENS, never hex — the rendering kit resolves them,
+ * so the same template serves every brand.
  */
-export const LayoutConfigSchema = z.object({
-  archetype: z.enum(['hero', 'diptych', 'stack', 'triptych', 'mosaic', 'quad', 'filmstrip']),
+
+/** The nine BrandConfig color roles a template may name. */
+export const ColorTokenSchema = z.enum([
+  'paper', 'ink', 'mute', 'faint', 'red', 'redField', 'redDeep', 'line', 'onRed',
+]);
+export type ColorToken = z.infer<typeof ColorTokenSchema>;
+
+const frac = z.number().min(0).max(1);
+
+/** A freeform panel cell. x/y/w/h are fractions of the panel area (the canvas
+ *  minus any reserved band). Freeform feather fades INSIDE the cell's own rect
+ *  on the listed edges — unlike preset feathering, which grows a panel over
+ *  its neighbour. */
+export const CellSchema = z.object({
+  x: frac,
+  y: frac,
+  w: z.number().min(0.02).max(1),
+  h: z.number().min(0.02).max(1),
+  feather: z.array(z.enum(['left', 'right', 'top', 'bottom'])).optional(),
+  fit: z.enum(['cover', 'contain']).default('cover'),
+  crop: z.enum(['attention', 'entropy', 'centre']).optional(),
+  treat: z.enum(['none', 'desaturate', 'dim', 'tint']).optional(),
+  z: z.number().int().min(0).max(30).default(0),
+});
+export type Cell = z.infer<typeof CellSchema>;
+
+/** A text layer. content is either a literal string or a role binding that
+ *  pulls the design's own title/kicker/tagline; an unbound role renders
+ *  nothing. font names one of the kit's three faces. */
+export const TextSpecSchema = z.object({
+  content: z.union([
+    z.string().min(1).max(200),
+    z.object({ role: z.enum(['projectTitle', 'projectKicker', 'projectTagline']) }),
+  ]),
+  font: z.enum(['title', 'kicker', 'tagline']),
+  x: frac,
+  y: frac,
+  w: z.number().min(0.05).max(1),
+  align: z.enum(['left', 'center', 'right']).default('left'),
+  sizeScale: z.number().min(0.3).max(4).default(1),
+  color: ColorTokenSchema.default('ink'),
+  /** *asterisked runs* render in this token (defaults to redDeep — the only
+   *  red permitted at text size). */
+  accentColor: ColorTokenSchema.optional(),
+  case: z.enum(['upper', 'none']).default('none'),
+  trackingEm: z.number().min(0).max(1).optional(),
+  z: z.number().int().min(0).max(100).default(60),
+});
+export type TextSpec = z.infer<typeof TextSpecSchema>;
+
+export const ShapeSchema = z.object({
+  kind: z.enum(['rect', 'rule', 'gradient']),
+  x: frac,
+  y: frac,
+  w: frac,
+  h: frac,
+  color: ColorTokenSchema,
+  opacity: z.number().min(0).max(1).default(1),
+  /** gradient only: fade direction in degrees; 0 = fades out toward the right. */
+  angle: z.number().min(0).max(360).optional(),
+  z: z.number().int().min(0).max(100).default(40),
+});
+export type Shape = z.infer<typeof ShapeSchema>;
+
+export const ChipStyleSchema = z.object({
+  plate: ColorTokenSchema.default('paper'),
+  text: ColorTokenSchema.default('redDeep'),
+  rule: ColorTokenSchema.default('red'),
+  /** Which corner of its cell a chip sits in. */
+  corner: z.enum(['tl', 'tr', 'bl', 'br']).default('tl'),
+});
+export type ChipStyle = z.infer<typeof ChipStyleSchema>;
+
+export const LockupBoxSchema = z.object({
+  /** Width as a fraction of the canvas (corner/inset lockups only). */
+  width: frac.optional(),
+  x: frac.optional(),
+  y: frac.optional(),
+  /** Reserve the band's height under the panel area. Default: lockup === 'bottom'. */
+  reserve: z.boolean().optional(),
+  scrim: z.boolean().optional(),
+});
+export type LockupBox = z.infer<typeof LockupBoxSchema>;
+
+/**
+ * Extendable base — generate.ts wraps it with a name field. Use
+ * LayoutConfigSchema (below) everywhere a config is actually validated: it
+ * adds the archetype-or-cells refinement.
+ */
+export const LayoutConfigObject = z.object({
+  /** Preset arrangement; optional when `cells` places panels directly. */
+  archetype: z.enum(['hero', 'diptych', 'stack', 'triptych', 'mosaic', 'quad', 'filmstrip']).optional(),
   seam: z.enum(['butt', 'hairline', 'feather']).default('feather'),
   /** Feather width in px at 1200 canvas width; scaled with the canvas. */
   feather: z.number().int().min(20).max(600).optional(),
@@ -72,11 +171,26 @@ export const LayoutConfigSchema = z.object({
   order: z.array(z.number().int().min(0)).optional(),
   treats: z.array(z.enum(['none', 'desaturate', 'dim', 'tint']).nullable()).optional(),
   crop: z.enum(['attention', 'entropy', 'centre']).default('attention'),
+  /** Freeform panel placement; presence overrides archetype. */
+  cells: z.array(CellSchema).min(1).max(8).optional(),
+  texts: z.array(TextSpecSchema).max(6).optional(),
+  shapes: z.array(ShapeSchema).max(8).optional(),
+  /** Canvas ground token; the renderer's default stays `line`. */
+  background: ColorTokenSchema.optional(),
+  chipStyle: ChipStyleSchema.optional(),
+  /** Preset ratio knob: mosaic feature width, diptych split, stack split. */
+  split: z.number().min(0.2).max(0.8).optional(),
+  lockupBox: LockupBoxSchema.optional(),
 });
-export type LayoutConfig = z.infer<typeof LayoutConfigSchema>;
+
+export const LayoutConfigSchema = LayoutConfigObject.refine(
+  (c) => c.archetype != null || (c.cells?.length ?? 0) > 0,
+  { message: 'a layout needs an archetype or cells' },
+);
+export type LayoutConfig = z.infer<typeof LayoutConfigObject>;
 
 /** Panels a given archetype needs. The UI must not offer a triptych to two picks. */
-export const ARCHETYPE_PANELS: Record<LayoutConfig['archetype'], number> = {
+export const ARCHETYPE_PANELS: Record<NonNullable<LayoutConfig['archetype']>, number> = {
   hero: 1,
   diptych: 2,
   stack: 2,
@@ -85,6 +199,11 @@ export const ARCHETYPE_PANELS: Record<LayoutConfig['archetype'], number> = {
   quad: 4,
   filmstrip: 4,
 };
+
+/** How many panels a config consumes — cells win over the archetype table. */
+export function layoutPanels(cfg: LayoutConfig): number {
+  return cfg.cells?.length ?? (cfg.archetype ? ARCHETYPE_PANELS[cfg.archetype] : 0);
+}
 
 export interface RenderOutput {
   outKey: string;

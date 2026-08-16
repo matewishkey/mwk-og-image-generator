@@ -22,6 +22,13 @@ const FontSpecSchema = z.object({
   file: z.string().min(1),
   size: z.number().int().min(8).max(120),
   weight: z.number().int().min(100).max(1000),
+  /**
+   * R2 key of an UPLOADED font (TTF/OTF). When set, the engine materialises it
+   * to a temp file and rewrites `file` before rendering; `family` must be the
+   * face's internal name-table family (parsed from the file at upload — pango
+   * silently falls back to DejaVu on a mismatch, so it is never hand-typed).
+   */
+  fileKey: z.string().optional(),
 });
 
 export const BrandConfigSchema = z

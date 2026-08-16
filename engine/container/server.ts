@@ -102,10 +102,29 @@ async function localMark(markKey: string): Promise<string> {
   return p;
 }
 
+/**
+ * Materialise an uploaded font (R2 fileKey) as a local file, same
+ * content-addressed cache as marks. The kit's `family` was parsed from this
+ * file's own name table at upload, so pango resolves the face correctly.
+ */
+const fontCache = new Map<string, string>();
+async function localFont(fileKey: string): Promise<string> {
+  const hit = fontCache.get(fileKey);
+  if (hit) return hit;
+  const p = join(tmpdir(), `font-${fileKey.split('/').pop()}`);
+  await writeFile(p, new Uint8Array(await r2Get(fileKey)));
+  fontCache.set(fileKey, p);
+  return p;
+}
+
 /** Validate a kit off the seam (a cast let a broken kit crash pango mid-render). */
 async function resolveBrand(raw: unknown, markKey?: string): Promise<BrandConfig> {
   let brand = raw ? BrandConfigSchema.parse(raw) : await loadBrand();
   if (markKey) brand = { ...brand, logo: { ...brand.logo, mark: await localMark(markKey) } };
+  for (const role of ['title', 'kicker', 'tagline'] as const) {
+    const fk = brand[role].fileKey;
+    if (fk) brand = { ...brand, [role]: { ...brand[role], file: await localFont(fk) } };
+  }
   return brand;
 }
 

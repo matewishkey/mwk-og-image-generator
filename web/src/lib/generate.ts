@@ -7,8 +7,8 @@
  */
 
 import {
-  ARCHETYPE_PANELS,
-  LayoutConfigSchema,
+  layoutPanels,
+  LayoutConfigObject,
   seamHeaders,
   type EngineGenerateRequest,
   type LayoutConfig,
@@ -38,8 +38,10 @@ export function extractJsonArray(raw: string): unknown[] {
   return JSON.parse(body.slice(start, end + 1)) as unknown[];
 }
 
-const NamedLayoutSchema = LayoutConfigSchema.extend({
+const NamedLayoutSchema = LayoutConfigObject.extend({
   name: z.string().min(1).max(60),
+}).refine((c) => c.archetype != null || (c.cells?.length ?? 0) > 0, {
+  message: 'a layout needs an archetype or cells',
 });
 
 export interface PanelInfo {
@@ -51,12 +53,18 @@ export interface PanelInfo {
 export interface LayoutBriefCtx {
   panels: PanelInfo[];
   format: { name: string; width: number; height: number; safe_w: number | null; safe_h: number | null };
+  /** The rendering kit's token->hex palette, so color choices are informed. */
+  palette?: Record<string, string>;
+  /** band.height / canvas.height of the kit — how much a bottom lockup consumes. */
+  bandFrac?: number;
 }
 
 const LAYOUT_SYSTEM = `You are an art director arranging picked images into one branded share card.
 You write LAYOUT CONFIGS as data; a deterministic renderer draws them. You never draw anything.
 
-Return ONLY a JSON array, no prose, no markdown fence. Each element:
+Return ONLY a JSON array, no prose, no markdown fence.
+
+MODE A — PRESET. A hand-tuned arrangement:
 {
   "name": "Two To Four Words",
   "archetype": "hero" | "diptych" | "stack" | "triptych" | "mosaic" | "quad" | "filmstrip",
@@ -66,14 +74,46 @@ Return ONLY a JSON array, no prose, no markdown fence. Each element:
   "labels": true | false,               // per-panel label chips; false for single-panel layouts
   "order": [0, 2, 1],                   // optional; 0-based indexes into the inventory, first = biggest panel
   "treats": [null, "desaturate", "dim"],// optional; per-panel; use sparingly, to make one panel the feature
-  "crop": "attention" | "entropy" | "centre"  // optional
+  "crop": "attention" | "entropy" | "centre",  // optional
+  "split": 0.2-0.8                      // optional; mosaic feature width / diptych / stack ratio
+}
+Panel counts are fixed by archetype: hero=1, diptych=2, stack=2, triptych=3, mosaic=3, quad=4, filmstrip=4.
+
+MODE B — FREEFORM. Place everything yourself. Instead of "archetype", give "cells"
+(1-8), and optionally "texts" (max 6), "shapes" (max 8), "background", "chipStyle",
+"lockupBox". All geometry is 0-1 fractions. Cells map into the panel area (the canvas
+minus a reserved bottom band when lockup is "bottom"); texts and shapes map to the FULL canvas.
+{
+  "name": "...",
+  "cells":  [{ "x":0, "y":0, "w":0.65, "h":1, "feather":["right"], "fit":"cover"|"contain",
+               "crop":"attention", "treat":"desaturate", "z":0 }],
+  "texts":  [{ "content": "literal string" | {"role":"projectTitle"|"projectKicker"|"projectTagline"},
+               "font":"title"|"kicker"|"tagline", "x":0.06, "y":0.1, "w":0.5,
+               "align":"left"|"center"|"right", "sizeScale":0.3-4, "color":"ink",
+               "accentColor":"redDeep", "case":"upper"|"none", "z":60 }],
+  "shapes": [{ "kind":"rect"|"rule"|"gradient", "x":0, "y":0.9, "w":1, "h":0.1,
+               "color":"red", "opacity":0.9, "angle":0, "z":40 }],
+  "background": "paper",
+  "chipStyle": { "plate":"paper", "text":"redDeep", "rule":"red", "corner":"tl"|"tr"|"bl"|"br" },
+  "lockup": "bottom" | ... | "none",
+  "lockupBox": { "width":0-1, "x":0-1, "y":0-1, "reserve":true|false, "scrim":true|false }
 }
 
-Panel counts are fixed by archetype: hero=1, diptych=2, stack=2, triptych=3, mosaic=3, quad=4, filmstrip=4.
-NEVER propose an archetype needing more panels than the inventory has.
-The configs must be genuinely different arrangements — different archetypes and lockups, not
-the same grid with a different name. "mosaic" makes its first panel the feature; use "order"
-to choose which image carries the card.`;
+COLOR RULE: colors are brand TOKEN NAMES only — paper, ink, mute, faint, red, redField,
+redDeep, line, onRed. Never hex. Red at text size is only ever "redDeep"; text sitting on a
+red field uses "onRed". Never rebuild a red square with shapes — the RedBlock logo lives only
+in the lockup.
+
+Z ORDER: cells default 0, shapes 40, texts 60; the lockup always renders last. A cell's
+feather fades inside its own rect on the listed edges — use it where cells overlap.
+Text "y" is the ink top of the line. Craft guardrails: at most 2 extra text layers beyond a
+role-bound title; freeform cards may use lockup "none" with a role-bound projectTitle text
+instead. NEVER propose more cells than the inventory has images.
+
+The configs must be genuinely different arrangements — vary archetype/cells, lockups and
+scale contrast, not the same grid with a different name. "mosaic" makes its first panel the
+feature; use "order" to choose which image carries the card. Mix modes: presets are reliable,
+freeform earns its place when it does something a preset cannot.`;
 
 export function layoutBrief(ctx: LayoutBriefCtx, brief: string, n: number): string {
   const inv = ctx.panels
@@ -83,10 +123,18 @@ export function layoutBrief(ctx: LayoutBriefCtx, brief: string, n: number): stri
     ctx.format.safe_w && ctx.format.safe_h
       ? ` Safe area ${ctx.format.safe_w}x${ctx.format.safe_h}, centred — the lockup and anything essential must sit inside it.`
       : '';
+  const palette = ctx.palette
+    ? `\nBrand palette (token: hex — name tokens, never hex): ${Object.entries(ctx.palette)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(', ')}.`
+    : '';
+  const band = ctx.bandFrac
+    ? `\nA bottom lockup's band consumes the bottom ${(ctx.bandFrac * 100).toFixed(0)}% of the canvas; cells sit above it.`
+    : '';
   return `Inventory — ${ctx.panels.length} picked image(s), 0-based:
 ${inv}
 
-Target format: ${ctx.format.name}, ${ctx.format.width}x${ctx.format.height}.${safe}
+Target format: ${ctx.format.name}, ${ctx.format.width}x${ctx.format.height}.${safe}${palette}${band}
 
 Direction from the user: ${brief || 'your call — a varied, confident spread'}
 
@@ -117,8 +165,8 @@ export async function generateLayouts(
         continue;
       }
       const { name, ...config } = parsed.data;
-      if (ARCHETYPE_PANELS[config.archetype] > ctx.panels.length) {
-        bad.push({ item, error: `${config.archetype} needs more panels than the inventory has` });
+      if (layoutPanels(config) > ctx.panels.length) {
+        bad.push({ item, error: `needs ${layoutPanels(config)} panels but the inventory has ${ctx.panels.length}` });
         continue;
       }
       good.push({ name, config });
