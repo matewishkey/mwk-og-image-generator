@@ -153,12 +153,32 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   pending saves first, the poll never clobbers a draft, and each shot carries a live
   Saved/Unsaved badge. Any new editing surface must keep all four properties.
 
-## The workspace island — the one interactive surface
+## The workspace islands — the interactive surfaces
 
-Round 3 merged Shots + Takes into `/projects/<slug>/shots`: an Astro page shell mounting
-ONE Preact island (`web/src/components/Workspace.tsx`, `@astrojs/preact`) that talks JSON
-to `/api/*`. Everything else stays server-rendered forms — extend the island pattern only
-when a page genuinely needs live state (the design page is the flagged next candidate).
+Round 3 merged Shots + Takes into one island; round 4 SPLIT it into two pages after mate
+called the single page heavy: `/projects/<slug>/shots` is a light overview
+(`components/ws/Overview.tsx` — rows, run-all, add-shot, EVERY-shot refs) and
+`/shots/<position>` is the full editor (`components/ws/ShotEditor.tsx`). Shared pieces
+(api client, toJpeg, HoldButton, Modal, icons) live in `components/ws/lib.tsx`. A third
+island is the layout editor (`components/ws/LayoutEditor.tsx`, below). Everything else
+stays server-rendered forms. Round-4 specifics:
+
+- **Modals are allowed for previews and pickers ONLY** (mate asked for them, revising
+  the earlier blanket no-popup rule): take lightbox (RAW art + download raw/card),
+  library attach picker, all-styles picker, settings style preview. Destructive actions
+  keep hold-to-confirm — `confirm()` and destructive dialogs stay banned.
+- **Shot-context grids show the PICTURE, not the branded card**: engine writes
+  `art-thumb.webp` beside the card thumb; `take.art_thumb_key` (0013). Card thumbs stay
+  on design/pack/style pages, where the band belongs. Old takes fall back to art_key.
+- The per-shot style strip shows ONLY the project's selected styles; "All styles…"
+  opens the full-catalog modal. `{shot N}` tokens are highlighted in the textarea via a
+  transparent-text backdrop overlay (`.ws-hl-*`), warn-red when unresolvable.
+- Refs UI is model-aware: hidden with a pointed hint when no selected model has
+  `refStyle !== 'none'`; otherwise the numbered strip shows EXACTLY the order models
+  receive (chain → shot → project) with per-model see/ignore notes.
+- Takes stuck live >3 min get a hold-to-confirm **Give up** (`applyTakeAction 'giveup'`
+  — the sweeper's flip scoped to one take).
+
 Load-bearing details:
 
 - `lib/workspace.ts` `takesPayload()` builds the state for BOTH the page shell and
@@ -173,6 +193,28 @@ Load-bearing details:
 - **Playwright gotcha**: `client:load` islands are server-rendered THEN hydrated — a test
   that clicks before hydration hits dead buttons. Wait for
   `astro-island:not([ssr])` before interacting (cost a full verify-run to find).
+
+## Design round 4: accent, dark palettes, the layout editor
+
+- **`redDeep` IS the accent** — emphasis (*word*) and kickers render in the KIT's
+  redDeep, so Tasman's emphasis is green. Every label says "the kit's accent" with a
+  live swatch; never write "renders red" again.
+- **Dark palettes**: `BrandConfig.colorsDark` (optional, PARTIAL — overlaid onto
+  `colors` when `EngineRenderRequest.theme === 'dark'` in resolveBrand). Kit editor has
+  a dark section with a derive-from-light button (keeps the reds — brand colours don't
+  theme). `design.theme` (0013) records which palette a design used; the render form's
+  theme checkboxes render one design per checked theme. Take cards stay light.
+- **The layout editor** (`/projects/<slug>/design/editor`): knobs + live preview.
+  Preview path: `POST /api/projects/<slug>/preview-layout` → engine `/render` with
+  `inline: true` → PNG bytes straight back, NOTHING persisted (no layout row, no design
+  row, no R2 object). Saving goes through the normal author flow. The engine's inline
+  mode is the only render path that writes nothing — keep it that way.
+- Minimal house layouts (0014): minimal-corner / minimal-title / minimal-pair; the
+  generate card's "minimal" chip fills a quiet brief.
+- The media page upload is a drop zone (drop + paste + click) feeding the SAME
+  `input[data-jpeg]`; the converter dispatches `jpeg-done` when it has rewritten the
+  files — programmatic senders wait for it before submitting. The converter passes
+  undecodable files through untouched BY DESIGN (server still sniffs).
 
 ## Multi-style, per-shot refs, character chaining (round 3 data model)
 

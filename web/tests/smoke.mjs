@@ -64,13 +64,21 @@ await anon.goto(`${BASE}/projects`);
 check('anonymous /projects redirects to /login', anon.url().includes('/login'));
 await anon.close();
 
-// contact sheet: images render, captions carry model + cost
+// overview: the old /takes URL redirects here; rows render with thumbs
 await page.goto(`${BASE}/projects/brick-launch/takes`);
+check('old /takes URL lands on the overview', page.url().endsWith('/projects/brick-launch/shots'));
+await page.waitForSelector('astro-island:not([ssr])', { timeout: 20_000 });
+const rows = await page.locator('.ws-orow').count();
+check(`overview renders shot rows (${rows})`, rows >= 1);
+await page.locator('.ws-orow img, .ws-orow .list-ph').first().waitFor({ timeout: 15_000 });
+
+// a shot's own page: the contact sheet lives there now
+await page.goto(`${BASE}/projects/brick-launch/shots/1`);
+await page.waitForSelector('astro-island:not([ssr])', { timeout: 20_000 });
 const imgs = page.locator('.take img');
 await imgs.first().waitFor({ timeout: 15_000 });
 const imgCount = await imgs.count();
-check(`contact sheet renders take images (${imgCount})`, imgCount >= 8);
-// Cards are full-res PNGs for now; give the first one a real decode window.
+check(`shot page renders take images (${imgCount})`, imgCount >= 1);
 const firstImgOk = await page
   .waitForFunction(
     () => { const i = document.querySelector('.take img'); return i && i.complete && i.naturalWidth > 0; },
@@ -99,7 +107,7 @@ check('first design thumb decoded', thumbOk);
 
 if (SHOTS) {
   await page.screenshot({ path: `${SHOTS}/smoke-design.png`, fullPage: true });
-  await page.goto(`${BASE}/projects/brick-launch/takes`);
+  await page.goto(`${BASE}/projects/brick-launch/shots/1`);
   await page.waitForTimeout(3000);
   await page.screenshot({ path: `${SHOTS}/smoke-contact-sheet.png`, fullPage: true });
   await page.goto(`${BASE}/projects`);
