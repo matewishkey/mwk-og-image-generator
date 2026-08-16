@@ -4,11 +4,34 @@ import '../styles/app.css';
 
 interface Props {
   title: string;
-  /** Which top-nav item is current, if any. */
-  nav?: 'projects' | 'styles' | 'models' | 'history' | 'team' | 'media';
+  /** Which rail item is current, if any. */
+  nav?: 'projects' | 'styles' | 'brand' | 'media' | 'models' | 'history' | 'team';
+  /** When set, the rail shows this project's section under Projects. */
+  project?: {
+    slug: string;
+    name: string;
+    active: 'shots' | 'takes' | 'design' | 'preview' | 'settings';
+  };
 }
-const { title, nav } = Astro.props;
+const { title, nav, project } = Astro.props;
 const user = Astro.locals.user;
+
+const NAV = [
+  { id: 'projects', label: 'Projects', href: '/projects' },
+  { id: 'styles', label: 'Styles', href: '/styles' },
+  { id: 'media', label: 'Media', href: '/media' },
+  { id: 'models', label: 'Models', href: '/models' },
+  { id: 'history', label: 'History', href: '/history' },
+  { id: 'team', label: 'Team', href: '/team' },
+] as const;
+
+const PROJECT_TABS = [
+  { id: 'shots', label: 'Shots' },
+  { id: 'takes', label: 'Takes' },
+  { id: 'design', label: 'Design' },
+  { id: 'preview', label: 'Preview' },
+  { id: 'settings', label: 'Settings' },
+] as const;
 ---
 
 <!doctype html>
@@ -25,36 +48,60 @@ const user = Astro.locals.user;
         document.documentElement.dataset.theme = 'dark';
     </script>
   </head>
-  <body>
-    <nav class="site-nav">
-      <div class="nav-inner">
-        <a class="brand" href="/">
+  <body class={user ? 'with-rail' : undefined}>
+    {user && (
+      <aside class="rail">
+        <a class="brand" href="/projects">
           <span class="redblock" aria-hidden="true">
             <!-- brand/mwk-mark-white.svg, inlined -->
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="-6.75 -6.75 131.53 113.5" fill="none"><path d="M0 100 L23.09 0 L46.17 100 L69.26 0 L69.26 100" fill="none" stroke="currentColor" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M69.26 100 L118.03 0" fill="none" stroke="currentColor" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </span>
           <span class="wm">Mate <em>Wish</em> Key <span class="wm-app">Studio</span></span>
         </a>
-        {user && (
+        <nav class="rail-nav">
+          {NAV.map((n) => (
+            <Fragment>
+              <a href={n.href} aria-current={nav === n.id ? 'page' : undefined}>{n.label}</a>
+              {n.id === 'projects' && project && (
+                <div class="rail-proj">
+                  <a class="rail-proj-name" href={`/projects/${project.slug}/shots`}>{project.name}</a>
+                  {PROJECT_TABS.map((t) => (
+                    <a
+                      class="rail-sub"
+                      href={`/projects/${project.slug}/${t.id}`}
+                      aria-current={project.active === t.id ? 'page' : undefined}
+                    >
+                      {t.label}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </Fragment>
+          ))}
+        </nav>
+        <div class="rail-foot">
+          <button class="tt" id="theme-toggle" aria-label="Toggle theme" type="button">◐</button>
+          <span class="rail-user" title={user.email}>{user.email}</span>
+          <form method="post" action="/auth/logout"><button class="linkish" type="submit">Out</button></form>
+        </div>
+      </aside>
+    )}
+    {!user && (
+      <nav class="site-nav">
+        <div class="nav-inner">
+          <a class="brand" href="/">
+            <span class="redblock" aria-hidden="true">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="-6.75 -6.75 131.53 113.5" fill="none"><path d="M0 100 L23.09 0 L46.17 100 L69.26 0 L69.26 100" fill="none" stroke="currentColor" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M69.26 100 L118.03 0" fill="none" stroke="currentColor" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <span class="wm">Mate <em>Wish</em> Key <span class="wm-app">Studio</span></span>
+          </a>
           <div class="links">
-            <a href="/projects" aria-current={nav === 'projects' ? 'page' : undefined}>Projects</a>
-            <a href="/styles" aria-current={nav === 'styles' ? 'page' : undefined}>Styles</a>
-            <a href="/media" aria-current={nav === 'media' ? 'page' : undefined}>Media</a>
-            <a href="/models" aria-current={nav === 'models' ? 'page' : undefined}>Models</a>
-            <a href="/history" aria-current={nav === 'history' ? 'page' : undefined}>History</a>
-            <a href="/team" aria-current={nav === 'team' ? 'page' : undefined}>Team</a>
-            <button class="tt" id="theme-toggle" aria-label="Toggle theme" type="button">◐</button>
-            <form method="post" action="/auth/logout"><button class="linkish" type="submit">Out</button></form>
-          </div>
-        )}
-        {!user && (
-          <div class="links">
             <button class="tt" id="theme-toggle" aria-label="Toggle theme" type="button">◐</button>
           </div>
-        )}
-      </div>
-    </nav>
-    <main class="wrap page-main">
+        </div>
+      </nav>
+    )}
+    <main class:list={['page-main', user ? 'rail-main' : 'wrap']}>
       <slot />
     </main>
     <script is:inline>

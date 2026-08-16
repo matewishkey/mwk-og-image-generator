@@ -1,6 +1,5 @@
 ---
 import Base from '../../../layouts/Base.astro';
-import ProjectTabs from '../../../components/ProjectTabs.astro';
 import { ENV } from '../../../lib/runtime';
 import { ulid } from '../../../lib/ulid';
 import { loadProject } from '../../../lib/data';
@@ -151,7 +150,7 @@ const estimate = estimateMicros(
 );
 ---
 
-<Base title={bundle.project.name} nav="projects">
+<Base title={bundle.project.name} nav="projects" project={{ slug, name: bundle.project.name, active: 'shots' }}>
   <div class="page-head">
     <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
     <h1>Shots</h1>
@@ -161,7 +160,6 @@ const estimate = estimateMicros(
     </p>
   </div>
 
-  <ProjectTabs slug={slug} active="shots" />
 
   {error && <p class="flash">{error}</p>}
 

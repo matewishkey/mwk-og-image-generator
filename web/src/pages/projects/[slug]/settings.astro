@@ -1,6 +1,5 @@
 ---
 import Base from '../../../layouts/Base.astro';
-import ProjectTabs from '../../../components/ProjectTabs.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import { MODELS } from '../../../../../src/models.ts';
@@ -65,14 +64,13 @@ if (Astro.request.method === 'POST') {
 const chosenModels = new Set<string>(JSON.parse(bundle.project.models));
 ---
 
-<Base title={`${bundle.project.name} · settings`} nav="projects">
+<Base title={`${bundle.project.name} · settings`} nav="projects" project={{ slug, name: bundle.project.name, active: 'settings' }}>
   <div class="page-head">
     <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
     <h1>Settings</h1>
     <p class="sub">Changing settings never touches what has already run — history stays history.</p>
   </div>
 
-  <ProjectTabs slug={slug} active="settings" />
 
   {error && <p class="flash">{error}</p>}
   {note && <p class="flash">{note}</p>}

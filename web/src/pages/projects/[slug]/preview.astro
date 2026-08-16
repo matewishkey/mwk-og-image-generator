@@ -1,6 +1,5 @@
 ---
 import Base from '../../../layouts/Base.astro';
-import ProjectTabs from '../../../components/ProjectTabs.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 
@@ -28,7 +27,7 @@ const desc = design?.tagline ?? '';
 const img = design ? `/img/${design.r2_key}` : null;
 ---
 
-<Base title={`${bundle.project.name} · preview`} nav="projects">
+<Base title={`${bundle.project.name} · preview`} nav="projects" project={{ slug, name: bundle.project.name, active: 'preview' }}>
   <div class="page-head">
     <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
     <h1>Preview in context</h1>
@@ -38,7 +37,6 @@ const img = design ? `/img/${design.r2_key}` : null;
     </p>
   </div>
 
-  <ProjectTabs slug={slug} active="design" />
 
   {
     !design ? (

@@ -1,6 +1,5 @@
 ---
 import Base from '../../../layouts/Base.astro';
-import ProjectTabs from '../../../components/ProjectTabs.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import { createRun, microsToUsd } from '../../../lib/runs';
@@ -114,7 +113,7 @@ const throttledSeen = takes.results.some((t) => t.error_kind === 'throttled');
 const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
 ---
 
-<Base title={`${bundle.project.name} · takes`} nav="projects">
+<Base title={`${bundle.project.name} · takes`} nav="projects" project={{ slug, name: bundle.project.name, active: 'takes' }}>
   <div class="page-head">
     <p class="kicker"><span class="g">/</span>{bundle.project.name}</p>
     <h1>Contact sheet</h1>
@@ -125,7 +124,6 @@ const pickedCount = bundle.shots.filter((s) => s.picked_take_id).length;
     </p>
   </div>
 
-  <ProjectTabs slug={slug} active="takes" />
 
   {error && <p class="flash">{error}</p>}
   {

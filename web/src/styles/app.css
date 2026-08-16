@@ -9,7 +9,117 @@
   padding-bottom: 4rem;
 }
 
-/* nav — recreated from the site's scoped styles, same tokens */
+/* ---- app shell: left rail --------------------------------------------- */
+/* Signed-in pages are a two-column grid: fixed rail, scrolling content.
+   The vendored tokens.css sets main{padding-top:nav-h} for the marketing
+   top-nav; the rail layout overrides that below. */
+:root { --rail-w: 15rem; }
+
+body.with-rail {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  min-height: 100dvh;
+}
+.rail {
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 1.4rem;
+  padding: 1.1rem 0 1.1rem;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  overflow-y: auto;
+}
+.rail .brand { padding-inline: 1.1rem; align-items: start; }
+.rail .wm { font-size: 1rem; white-space: normal; line-height: 1.25; }
+.rail-nav { display: grid; font: 700 0.92rem/1 var(--font-body); }
+.rail-nav > a {
+  color: var(--mute);
+  padding: 0.62rem 1.1rem;
+  border-left: 2px solid transparent;
+}
+.rail-nav > a:hover { color: var(--ink); text-decoration: none; }
+.rail-nav > a[aria-current='page'] { color: var(--accent); border-left-color: var(--accent); }
+
+/* contextual project section, nested under Projects */
+.rail-proj {
+  display: grid;
+  margin: 0.15rem 0 0.45rem;
+  padding-left: 1.1rem;
+}
+.rail-proj-name {
+  color: var(--ink);
+  font: 700 0.85rem/1.3 var(--font-body);
+  padding: 0.35rem 1.1rem 0.35rem 0.9rem;
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-proj-name:hover { color: var(--accent); text-decoration: none; }
+.rail-sub {
+  color: var(--mute);
+  font: 400 0.88rem/1 var(--font-body);
+  padding: 0.42rem 1.1rem 0.42rem 0.9rem;
+  border-left: 1px solid var(--line);
+}
+.rail-sub:hover { color: var(--ink); text-decoration: none; }
+.rail-sub[aria-current='page'] { color: var(--accent); border-left-color: var(--accent); font-weight: 700; }
+
+.rail-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-inline: 1.1rem;
+}
+.rail-user {
+  color: var(--faint);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* content column: the rail replaces the fixed top nav, so undo its offset */
+main.rail-main {
+  padding-top: 2rem;
+  padding-inline: var(--gutter);
+  max-width: calc(var(--page) - var(--rail-w));
+  min-width: 0;
+}
+
+/* narrow screens: the rail becomes a slim top strip, links scroll sideways */
+@media (width <= 800px) {
+  body.with-rail { grid-template-columns: 1fr; }
+  .rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.6rem 1rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+  }
+  .rail .brand { padding-inline: 0; }
+  .rail .wm { display: none; }
+  .rail-nav { display: flex; gap: 0.2rem; }
+  .rail-nav > a { border-left: 0; padding: 0.5rem 0.55rem; white-space: nowrap; }
+  .rail-nav > a[aria-current='page'] { border-bottom: 2px solid var(--accent); }
+  .rail-proj { display: flex; margin: 0; padding-left: 0; }
+  .rail-proj-name, .rail-sub { border-left: 0; white-space: nowrap; }
+  .rail-foot { margin-top: 0; margin-left: auto; }
+  .rail-user { display: none; }
+  main.rail-main { padding-top: 1.4rem; max-width: none; }
+}
+
+/* nav — the logged-out top bar (login, verify, accept) keeps the old chrome */
 .site-nav {
   position: fixed;
   inset: 0 0 auto;
