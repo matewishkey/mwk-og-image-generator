@@ -340,6 +340,47 @@ export async function authorTemplate(
   return { designId, layoutId };
 }
 
+/**
+ * Same template, another picture: re-render a design with EVERY panel slot
+ * fed by the chosen shot. This is the deliberate act the scope bar refuses to
+ * do implicitly — explicit `panel` refs get re-cast here because the owner
+ * asked for exactly that.
+ */
+export async function recastDesign(
+  env: Env,
+  ctx: DesignCtx,
+  o: { designId: string; shotPosition: number },
+): Promise<string> {
+  const src = await env.DB.prepare(
+    `SELECT layout_id, format_id, theme, effect, title, kicker, tagline FROM design
+      WHERE id = ?1 AND team_id = ?2 AND project_id = ?3`,
+  )
+    .bind(o.designId, ctx.teamId, ctx.project.id)
+    .first<{ layout_id: string; format_id: string; theme: string; effect: string | null;
+             title: string | null; kicker: string | null; tagline: string | null }>();
+  if (!src) throw new Error('no such design');
+  const takes = await resolvePanelTakes(env, ctx.project.id);
+  const chosen = takes.find((t) => t.position === o.shotPosition);
+  if (!chosen || chosen.hidden || !chosen.take_id || !chosen.art_key)
+    throw new Error('that shot has no usable take (or is hidden)');
+  const panel = { takeId: chosen.take_id, artKey: chosen.art_key, label: chosen.label ?? undefined };
+  return createDesign(env, {
+    teamId: ctx.teamId,
+    userId: ctx.userId,
+    projectId: ctx.project.id,
+    layoutId: src.layout_id,
+    formatId: src.format_id,
+    brandKitId: ctx.project.brand_kit_id,
+    title: src.title ?? undefined,
+    kicker: src.kicker ?? undefined,
+    tagline: src.tagline ?? undefined,
+    theme: src.theme === 'dark' ? 'dark' : 'light',
+    effect: src.effect ?? undefined,
+    // Every slot answers with the chosen shot, whatever index a cell asks for.
+    panels: Array.from({ length: Math.max(takes.length, 31) }, () => panel),
+  });
+}
+
 export interface ReviseOpts {
   designId: string;
   instruction: string;

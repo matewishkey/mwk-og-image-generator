@@ -12,6 +12,7 @@ import {
   ensurePackLink,
   generateAndRender,
   renderAllFormats,
+  recastDesign,
   renderFromLayout,
   reviseDesign,
   saveTemplate,
@@ -151,6 +152,12 @@ if (Astro.request.method === 'POST') {
         instruction: String(form.get('instruction') ?? ''),
         styleId: scopeStyle?.id,
         shotPosition: scopeShot ?? undefined,
+      });
+      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}lead=${newLead}`);
+    } else if (action === 'recast') {
+      const newLead = await recastDesign(env, ctx, {
+        designId: String(form.get('design') ?? ''),
+        shotPosition: Number(form.get('shot')),
       });
       return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}lead=${newLead}`);
     } else if (action === 'all-formats') {
@@ -365,12 +372,29 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
                     <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}><Icon name="watch" />Preview</a>
                     <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${lead.layout_id}&design=${lead.id}${scopeQs ? `&${scopeQs}` : ''}`}><Icon name="edit" />Open in editor</a>
                     <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}><Icon name="download" />Download</a>
+                    {lead.collection_id && (
+                      <a class="btn small" href={`/api/projects/${slug}/zip?collection=${lead.collection_id}`}>
+                        <Icon name="download" />Download all {leadSiblings.length + 1} (zip)
+                      </a>
+                    )}
                     {leadPanels.map((p) => (
                       <a class="btn small ghost" href={`/img/${p.art_key}`} download={`${slug}-${p.label ?? `panel-${p.position}`}-raw.png`}>
                         <Icon name="download" />Raw {leadPanels.length > 1 ? p.label ?? p.position : 'picture'}
                       </a>
                     ))}
                   </span>
+                  {panels.filter((pp) => !pp.hidden && pp.take_id).length > 1 && (
+                    <form method="post" class="recast-row">
+                      <input type="hidden" name="action" value="recast" />
+                      <input type="hidden" name="design" value={lead.id} />
+                      <span class="mono faint">same template, other picture:</span>
+                      {panels.filter((pp) => !pp.hidden && pp.take_id).map((pp) => (
+                        <button class="chip" type="submit" name="shot" value={pp.position} data-running="Rendering…">
+                          {pp.label ?? `shot ${pp.position}`}
+                        </button>
+                      ))}
+                    </form>
+                  )}
                   <form method="post" class="revise-form">
                     <input type="hidden" name="action" value="revise" />
                     <input type="hidden" name="design" value={lead.id} />
@@ -500,7 +524,11 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
                           ))}
                         </span>
                       )}
-                      <a class="btn small ghost" href={`/img/${g.rows[0]!.r2_key}`} download={`${slug}-${g.rows[0]!.format_slug}.png`} title="Download"><Icon name="download" />PNG</a>
+                      {g.rows.length > 1 && g.rows[0]!.collection_id ? (
+                        <a class="btn small ghost" href={`/api/projects/${slug}/zip?collection=${g.rows[0]!.collection_id}`} title="Download the whole set"><Icon name="download" />zip</a>
+                      ) : (
+                        <a class="btn small ghost" href={`/img/${g.rows[0]!.r2_key}`} download={`${slug}-${g.rows[0]!.format_slug}.png`} title="Download"><Icon name="download" />PNG</a>
+                      )}
                     </figcaption>
                   </figure>
                 ))}
@@ -611,6 +639,8 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
   .lead-card figcaption { display: flex; align-items: center; gap: 0.9rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
   .lead-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
   .fmt-chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+  .recast-row { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .recast-row .chip { cursor: pointer; }
   .revise-form { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.5rem; }
   .revise-form input[type=text] { flex: 1; font-size: 0.85rem; padding: 0.4rem 0.6rem; }
   .save-template { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.3rem; }
