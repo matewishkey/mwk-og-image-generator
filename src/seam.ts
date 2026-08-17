@@ -227,24 +227,39 @@ export const ARCHETYPE_PANELS: Record<NonNullable<LayoutConfig['archetype']>, nu
  * take the first N. Throws with the offending cell when an index is out of
  * range — the caller's inventory is simply too short.
  */
-export function selectPanels<T>(cfg: LayoutConfig, inventory: T[]): T[] {
+export function selectPanels<T>(cfg: LayoutConfig, inventory: (T | null)[]): T[] {
   if (!cfg.cells?.length) {
     const needed = layoutPanels(cfg);
-    if (inventory.length < needed) {
-      throw new Error(`This layout needs ${needed} picks; the project has ${inventory.length}.`);
+    const head = inventory.slice(0, needed);
+    if (head.length < needed || head.some((p) => p == null)) {
+      throw new Error(`This layout needs ${needed} usable shots; hidden or missing ones don't count.`);
     }
-    return inventory.slice(0, needed);
+    return head as T[];
   }
   return cfg.cells.map((c, i) => {
     const idx = c.panel ?? i;
     const p = inventory[idx];
-    if (p === undefined) {
+    // null = the slot exists but is hidden/unusable; undefined = out of range.
+    // Both fail the same way: the template names a shot it cannot have.
+    if (p == null) {
       throw new Error(
-        `Cell ${i + 1} draws from shot ${idx + 1}, but the project only has ${inventory.length} shots with usable takes.`,
+        `Cell ${i + 1} draws from shot ${idx + 1}, which is ${inventory[idx] === null ? 'hidden' : 'missing'}.`,
       );
     }
     return p;
   });
+}
+
+/** The 0-based inventory indexes a config consumes, in cell order. */
+export function consumedPanels(cfg: LayoutConfig): number[] {
+  if (cfg.cells?.length) return cfg.cells.map((c, i) => c.panel ?? i);
+  return Array.from({ length: layoutPanels(cfg) }, (_, i) => i);
+}
+
+/** Whether any cell names its shot explicitly — such templates are pinned to
+ *  those shots and must not be silently re-cast by a shot-scope remap. */
+export function hasExplicitPanels(cfg: LayoutConfig): boolean {
+  return !!cfg.cells?.some((c) => c.panel != null);
 }
 
 /** How many panels a config consumes — cells win over the archetype table. */

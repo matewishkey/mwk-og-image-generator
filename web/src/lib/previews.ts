@@ -14,6 +14,7 @@
  */
 
 import {
+  hasExplicitPanels,
   LayoutConfigSchema,
   layoutPanels,
   selectPanels,
@@ -25,10 +26,16 @@ import {
 export interface PanelTake {
   position: number;
   label: string | null;
-  take_id: string;
-  art_key: string;
+  /** Null when the shot has no usable take (in the requested style). The row
+   *  still occupies its slot so `panel` indexes never shift. */
+  take_id: string | null;
+  art_key: string | null;
+  art_thumb_key: string | null;
   width: number | null;
   height: number | null;
+  /** Set when the shot is hidden: it keeps its inventory slot (so `panel`
+   *  indexes stay stable) but must not feed new designs or previews. */
+  hidden: string | null;
 }
 
 /**
@@ -45,9 +52,10 @@ export async function resolvePanelTakes(
   // of an ON-clause subquery ("no such column: sh.picked_take_id"), so the pick
   // preference is a coalesce of two subqueries whose correlation sits in WHERE.
   const rows = await env.DB.prepare(
-    `SELECT sh.position, sh.label, t.id AS take_id, t.art_key, t.width, t.height
+    `SELECT sh.position, sh.label, sh.hidden_at AS hidden, t.id AS take_id,
+            t.art_key, t.art_thumb_key, t.width, t.height
        FROM shot sh
-       JOIN take t ON t.id = coalesce(
+       LEFT JOIN take t ON t.id = coalesce(
          (SELECT tp.id FROM take tp
            WHERE tp.id = sh.picked_take_id AND tp.status = 'succeeded' AND tp.art_key IS NOT NULL
              AND (?2 IS NULL OR tp.style_id = ?2)),
@@ -77,6 +85,9 @@ export interface EnsureOpts {
   kind: 'layout' | 'style';
   refId: string;
   layoutConfig: LayoutConfig;
+  /** Lead the inventory with this shot for templates that don't name their
+   *  shots explicitly — "work on shot N". Explicitly-wired templates ignore it. */
+  shotPosition?: number;
   /** For kind 'style': scope panel takes to this style. */
   styleId?: string;
   theme?: 'light' | 'dark';
@@ -101,9 +112,25 @@ async function sha256(text: string): Promise<string> {
  * Return a fresh preview, rendering only when the inputs changed. Throws when
  * the layout needs more panels than the project can currently supply.
  */
+/**
+ * Hidden shots become null slots (index-stable); a shot scope moves the chosen
+ * shot to the front unless the template pins its shots via cell.panel.
+ */
+export function scopeInventory(
+  cfg: LayoutConfig,
+  panels: PanelTake[],
+  shotPosition?: number,
+): (PanelTake | null)[] {
+  const slots: (PanelTake | null)[] = panels.map((p) => (p.hidden || !p.take_id ? null : p));
+  if (shotPosition == null || hasExplicitPanels(cfg)) return slots;
+  const i = panels.findIndex((p) => p.position === shotPosition);
+  if (i < 0 || slots[i] == null) return slots;
+  return [slots[i], ...slots.filter((_, j) => j !== i)];
+}
+
 export async function ensurePreview(env: Env, o: EnsureOpts): Promise<PreviewRow> {
   const panels = await resolvePanelTakes(env, o.project.id, o.styleId);
-  const sel = selectPanels(o.layoutConfig, panels);
+  const sel = selectPanels(o.layoutConfig, scopeInventory(o.layoutConfig, panels, o.shotPosition));
 
   const kit = await env.DB.prepare(`SELECT config, mark_key FROM brand_kit WHERE id = ?1`)
     .bind(o.project.brand_kit_id)
@@ -127,7 +154,8 @@ export async function ensurePreview(env: Env, o: EnsureOpts): Promise<PreviewRow
       tagline: o.project.tagline ?? undefined,
     },
     panels: sel.map((p) => ({
-      key: p.art_key,
+      // scopeInventory nulls any slot without a take, so art_key is real here.
+      key: p.art_key!,
       label: p.label ?? `shot ${p.position}`,
     })),
   };
@@ -167,10 +195,9 @@ export async function ensurePreview(env: Env, o: EnsureOpts): Promise<PreviewRow
 }
 
 /**
- * The layout a style preview renders with: the lead design's layout when the
- * style's takes can fill it, else the usable layout needing the fewest
- * images. Deterministic, so every style previews on the SAME layout and the
- * comparison is style vs style.
+ * The layout a style preview renders with: the fewest-panels HOUSE layout,
+ * slug-ordered — a FIXED choice, so style cards stay in family with each
+ * other across time instead of chasing whatever design happens to lead.
  */
 export async function stylePreviewLayout(
   env: Env,
@@ -178,23 +205,12 @@ export async function stylePreviewLayout(
   projectId: string,
   panelCount: number,
 ): Promise<{ id: string; config: LayoutConfig } | null> {
-  const lead = await env.DB.prepare(
-    `SELECT l.id, l.config FROM design d JOIN layout l ON l.id = d.layout_id
-      WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
-      ORDER BY d.created_at DESC LIMIT 1`,
-  )
-    .bind(projectId)
-    .first<{ id: string; config: string }>();
-  const candidates = lead
-    ? [lead]
-    : (
-        await env.DB.prepare(
-          `SELECT l.id, l.config FROM layout l JOIN team t ON t.id = l.team_id
-            WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL`,
-        )
-          .bind(teamId)
-          .all<{ id: string; config: string }>()
-      ).results;
+  const candidates = (
+    await env.DB.prepare(
+      `SELECT l.id, l.config FROM layout l JOIN team t ON t.id = l.team_id
+        WHERE t.kind = 'house' AND l.archived_at IS NULL ORDER BY l.slug`,
+    ).all<{ id: string; config: string }>()
+  ).results;
 
   let best: { id: string; config: LayoutConfig; panels: number } | null = null;
   for (const c of candidates) {

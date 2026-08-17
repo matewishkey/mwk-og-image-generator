@@ -123,6 +123,18 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   through it; the engine receives panels already in cell order and its baked schema
   copy strips the field. Never reintroduce `panels.slice(0, needed)` — positional
   slicing is why banner configs once needed 7 placeholder feeder cells to reach shot 8.
+- **The design page is scope-driven (round 6, the 3-reviewer usability pass):**
+  `?shot=<position>&style=<slug>&theme=dark` is the working scope — the scope IS the
+  shareable "package". Templates without explicit panel refs get the scoped shot LED
+  into their inventory; explicitly-wired templates filter instead (never re-cast).
+  Preview cache refs compose the scope (`<layoutId>@s-<style>@p-<shot>@t-dark`), so
+  scope flips switch caches instead of thrashing one row.
+- **`shot.hidden_at` (0017) hides a shot without deleting**: it KEEPS its inventory
+  slot as null (resolvePanelTakes LEFT JOIN + scopeInventory in previews.ts), so
+  `cell.panel` indexes never shift — a hidden shot fails loud ("cell N draws from a
+  hidden shot"), never silently re-casts. Same for style gaps: a shot with no take
+  in the scoped style is a null slot, not a dropped row. Don't "optimise" the LEFT
+  JOIN back to INNER.
 - **Re-rendering the same layout+format+theme+effect SUPERSEDES the old design row**
   (createDesign/createCollection close each insert batch with the UPDATE). The design
   page also hides designs whose LAYOUT is archived (`?versions=all` shows them) — so

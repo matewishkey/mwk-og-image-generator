@@ -29,8 +29,8 @@ export interface DesignInputs {
   effect?: string;
   /** 'dark' renders with the kit's colorsDark overlaid; default 'light'. */
   theme?: 'light' | 'dark';
-  /** Panels in order: art R2 keys with labels, each tied to a take id. */
-  panels: { takeId: string; artKey: string; label?: string }[];
+  /** Panels in order (null = hidden/unusable slot, kept for index stability). */
+  panels: ({ takeId: string; artKey: string; label?: string } | null)[];
 }
 
 export async function createDesign(env: Env, o: DesignInputs): Promise<string> {

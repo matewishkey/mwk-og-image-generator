@@ -8,12 +8,12 @@
  * drafts exist, before anything is picked.
  */
 
-import { layoutPanels, LayoutConfigSchema } from '../../../src/seam.ts';
+import { layoutPanels, LayoutConfigSchema, type LayoutConfig } from '../../../src/seam.ts';
 import { isEffect } from '../../../src/effects.ts';
 import { slugify } from '../../../src/style.ts';
 import { createCollection, createDesign, type FormatRow } from './design';
 import { generateLayouts } from './generate';
-import { resolvePanelTakes } from './previews';
+import { resolvePanelTakes, scopeInventory } from './previews';
 import { ulid } from './ulid';
 
 export interface DesignCtx {
@@ -35,14 +35,39 @@ export interface DesignPanel {
   label?: string;
 }
 
-/** The project's current panel inventory, in shot order. */
+/** The project's current panel inventory, in shot order. Hidden shots are
+ *  EXCLUDED here — this compact list feeds archetype layouts and the
+ *  generate brief, which take the first N. */
 export async function projectPanels(env: Env, projectId: string): Promise<DesignPanel[]> {
   const takes = await resolvePanelTakes(env, projectId);
-  return takes.map((t) => ({
-    takeId: t.take_id,
-    artKey: t.art_key,
+  return takes.filter((t) => !t.hidden && t.take_id && t.art_key).map((t) => ({
+    takeId: t.take_id!,
+    artKey: t.art_key!,
     label: t.label ?? undefined,
   }));
+}
+
+/** The slot-stable inventory for a specific layout: hidden shots stay as null
+ *  slots so cell.panel indexes never shift, an optional style narrows takes,
+ *  and an optional shot leads the order for templates without explicit refs. */
+export async function scopedProjectPanels(
+  env: Env,
+  projectId: string,
+  cfg: LayoutConfig,
+  scope: { styleId?: string; shotPosition?: number } = {},
+): Promise<(DesignPanel | null)[]> {
+  const takes = await resolvePanelTakes(env, projectId, scope.styleId);
+  return scopeInventory(cfg, takes, scope.shotPosition).map((t) =>
+    t && t.take_id && t.art_key ? { takeId: t.take_id, artKey: t.art_key, label: t.label ?? undefined } : null,
+  );
+}
+
+async function layoutConfigOf(env: Env, layoutId: string): Promise<LayoutConfig> {
+  const row = await env.DB.prepare(`SELECT config FROM layout WHERE id = ?1`)
+    .bind(layoutId)
+    .first<{ config: string }>();
+  if (!row) throw new Error('no such layout');
+  return LayoutConfigSchema.parse(JSON.parse(row.config));
 }
 
 export interface RenderWords {
@@ -56,6 +81,10 @@ export interface RenderFromLayoutOpts extends RenderWords {
   formats: FormatRow[];
   themes?: ('light' | 'dark')[];
   effect?: string;
+  /** Narrow the panel inventory to one style's takes. */
+  styleId?: string;
+  /** Lead the inventory with this shot (templates without explicit refs). */
+  shotPosition?: number;
 }
 
 /**
@@ -70,8 +99,12 @@ export async function renderFromLayout(
 ): Promise<string> {
   if (!o.formats.length) throw new Error('Pick at least one format.');
   const themes = o.themes?.length ? o.themes : (['light'] as const);
-  const panels = await projectPanels(env, ctx.project.id);
-  if (!panels.length) throw new Error('No usable takes yet — run the shots first.');
+  const cfg = await layoutConfigOf(env, o.layoutId);
+  const panels = await scopedProjectPanels(env, ctx.project.id, cfg, {
+    styleId: o.styleId,
+    shotPosition: o.shotPosition,
+  });
+  if (!panels.some(Boolean)) throw new Error('No usable takes yet — run the shots first.');
 
   const base = {
     teamId: ctx.teamId,
@@ -119,7 +152,7 @@ export async function renderAllFormats(
     .first<{ layout_id: string; title: string | null; kicker: string | null;
              tagline: string | null; theme: string; effect: string | null }>();
   if (!src) throw new Error('no such design');
-  const panels = await projectPanels(env, ctx.project.id);
+  const panels = await scopedProjectPanels(env, ctx.project.id, await layoutConfigOf(env, src.layout_id));
   const collectionId = ulid();
   await env.DB.prepare(
     `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)

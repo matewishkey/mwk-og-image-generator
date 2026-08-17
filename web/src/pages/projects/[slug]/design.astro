@@ -3,7 +3,11 @@ import Base from '../../../layouts/Base.astro';
 import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
-import { layoutPanels, LayoutConfigSchema } from '../../../../../src/seam.ts';
+import {
+  consumedPanels,
+  hasExplicitPanels,
+  LayoutConfigSchema,
+} from '../../../../../src/seam.ts';
 import {
   ensurePackLink,
   generateAndRender,
@@ -11,8 +15,7 @@ import {
   renderFromLayout,
   saveTemplate,
 } from '../../../lib/design-actions';
-import { updateProject } from '../../../lib/projects';
-import { resolvePanelTakes } from '../../../lib/previews';
+import { resolvePanelTakes, scopeInventory } from '../../../lib/previews';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -24,9 +27,32 @@ const bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
 const project = bundle.project;
 
-// The inventory: the best take per shot (the pick, else the newest draft).
-// Designs and previews work from drafts — picking upgrades them, never gates them.
-const panels = await resolvePanelTakes(env, project.id);
+// ── The scope: which shot / style / theme this whole page works in.
+// Lives in the query string so a scope IS a pasteable, bookmarkable package.
+const q = Astro.url.searchParams;
+const scopeShot = /^\d+$/.test(q.get('shot') ?? '') ? Number(q.get('shot')) : null;
+const scopeStyle = bundle.styles.find((s) => s.slug === q.get('style')) ?? null;
+const scopeTheme = q.get('theme') === 'dark' ? ('dark' as const) : ('light' as const);
+/** Rebuild the query string with one key changed; null deletes the key. */
+const scoped = (patch: Record<string, string | null>) => {
+  const p = new URLSearchParams(q);
+  p.delete('lead');
+  for (const [k, v] of Object.entries(patch)) (v === null ? p.delete(k) : p.set(k, v));
+  const s = p.toString();
+  return `/projects/${slug}/design${s ? `?${s}` : ''}`;
+};
+const scopeQs = (() => {
+  const p = new URLSearchParams();
+  if (scopeShot != null) p.set('shot', String(scopeShot));
+  if (scopeStyle) p.set('style', scopeStyle.slug);
+  if (scopeTheme === 'dark') p.set('theme', 'dark');
+  return p.toString();
+})();
+
+// The inventory: one slot per shot, position-ordered and index-STABLE — hidden
+// shots and style gaps become null slots, they never shift panel indexes.
+const panels = await resolvePanelTakes(env, project.id, scopeStyle?.id);
+const usableSlots = panels.filter((p) => !p.hidden && p.take_id).length;
 const pickedCount = panels.length
   ? (
       await env.DB.prepare(
@@ -37,54 +63,55 @@ const pickedCount = panels.length
     )?.n ?? 0
   : 0;
 
-// House layouts plus NAMED team templates. Anonymous gen-* layouts from past
-// generate runs stay out — their designs live in the versions history, and 70
-// near-identical cards is the confusion this gallery exists to kill.
+// House layouts plus NAMED team templates. Anonymous gen-* layouts stay out.
 const layouts = await env.DB.prepare(
-  `SELECT l.id, l.slug, l.name, l.config FROM layout l JOIN team t ON t.id = l.team_id
+  `SELECT l.id, l.slug, l.name, l.config, t.kind AS team_kind FROM layout l JOIN team t ON t.id = l.team_id
     WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL
       AND (t.kind = 'house' OR l.slug NOT LIKE 'gen-%')
     ORDER BY l.name`,
 )
   .bind(team.id)
-  .all<{ id: string; slug: string; name: string; config: string }>();
+  .all<{ id: string; slug: string; name: string; config: string; team_kind: string }>();
 
 const formats = await env.DB.prepare(`SELECT id, slug, name, width, height FROM format ORDER BY rowid`).all<{
   id: string; slug: string; name: string; width: number; height: number;
 }>();
 const ogFormat = formats.results.find((f) => f.slug === 'og') ?? formats.results[0]!;
 
-const kits = await env.DB.prepare(
-  `SELECT b.id, b.name, t.kind FROM brand_kit b JOIN team t ON t.id = b.team_id
-    WHERE (b.team_id = ?1 OR t.kind = 'house') AND b.archived_at IS NULL
-    ORDER BY t.kind DESC, b.name`,
-)
-  .bind(team.id)
-  .all<{ id: string; name: string; kind: string }>();
-
-const kitConfig = await env.DB.prepare(`SELECT config FROM brand_kit WHERE id = ?1`)
+const kitRow = await env.DB.prepare(`SELECT name, config FROM brand_kit WHERE id = ?1`)
   .bind(project.brand_kit_id)
-  .first<{ config: string }>();
-// The kit drives the emphasis colour and whether a dark render differs at all.
+  .first<{ name: string; config: string }>();
 const kitParsed = (() => {
   try {
-    return JSON.parse(kitConfig?.config ?? '') as {
-      colors?: { redDeep?: string };
-      colorsDark?: Record<string, string>;
-    };
+    return JSON.parse(kitRow?.config ?? '') as { colorsDark?: Record<string, string> };
   } catch {
     return {};
   }
 })();
-const accentHex = kitParsed.colors?.redDeep ?? '#f0524a';
 const kitHasDark = !!kitParsed.colorsDark && Object.keys(kitParsed.colorsDark).length > 0;
 
+// Which templates fit the current scope, and which shots each one uses.
+const shotIndexOfScope = scopeShot != null ? panels.findIndex((p) => p.position === scopeShot) : -1;
 const usable = layouts.results.flatMap((l) => {
-  const cfg = LayoutConfigSchema.safeParse(JSON.parse(l.config));
-  if (!cfg.success) return [];
-  const needs = layoutPanels(cfg.data);
-  return needs <= panels.length ? [{ ...l, needs }] : [];
+  const parsed = LayoutConfigSchema.safeParse(JSON.parse(l.config));
+  if (!parsed.success) return [];
+  const cfg = parsed.data;
+  const consumed = consumedPanels(cfg);
+  const explicit = hasExplicitPanels(cfg);
+  const inv = scopeInventory(cfg, panels, scopeShot ?? undefined);
+  const fits = consumed.every((i) => inv[i] != null);
+  if (!fits) return [];
+  // Scoped to a shot: explicitly-wired templates only show when they use it.
+  if (scopeShot != null && explicit && shotIndexOfScope >= 0 && !consumed.includes(shotIndexOfScope))
+    return [];
+  const uses = consumed
+    .map((i) => (explicit || scopeShot == null ? panels[i] : inv[i]))
+    .filter(Boolean)
+    .map((p) => p!.label ?? `shot ${p!.position}`);
+  return [{ ...l, needs: consumed.length, uses: [...new Set(uses)] }];
 });
+const teamTemplates = usable.filter((l) => l.team_kind !== 'house');
+const houseLayouts = usable.filter((l) => l.team_kind === 'house');
 
 const ctx = {
   teamId: team.id,
@@ -100,23 +127,26 @@ const ctx = {
 };
 
 let error = '';
-let genNote = Astro.url.searchParams.get('gen') ?? '';
+let genNote = q.get('gen') ?? '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.getAll('action').at(-1) ?? 'render');
+  const back = `/projects/${slug}/design${scopeQs ? `?${scopeQs}` : ''}`;
   try {
     if (action === 'pack-link') {
       await ensurePackLink(env, project.id);
-      return Astro.redirect(`/projects/${slug}/design`);
-    } else if (action === 'set-kit') {
-      const r = await updateProject(env, team.id, project.id, {
-        brandKit: String(form.get('kit') ?? ''),
-      });
-      if ('error' in r) throw new Error(r.error);
-      return Astro.redirect(`/projects/${slug}/design`);
+      return Astro.redirect(back);
+    } else if (action === 'hide-shot' || action === 'unhide-shot') {
+      const pos = Number(form.get('position'));
+      await env.DB.prepare(
+        `UPDATE shot SET hidden_at = ?1 WHERE project_id = ?2 AND position = ?3 AND deleted_at IS NULL`,
+      )
+        .bind(action === 'hide-shot' ? new Date().toISOString() : null, project.id, pos)
+        .run();
+      return Astro.redirect(back);
     } else if (action === 'all-formats') {
       await renderAllFormats(env, ctx, String(form.get('design') ?? ''), formats.results);
-      return Astro.redirect(`/projects/${slug}/design`);
+      return Astro.redirect(back);
     } else if (action === 'generate') {
       const formatId = String(form.get('format') ?? ogFormat.id);
       const fmtRow = await env.DB.prepare(
@@ -125,40 +155,41 @@ if (Astro.request.method === 'POST') {
         .bind(formatId)
         .first<{ id: string; slug: string; name: string; width: number; height: number;
                  safe_w: number | null; safe_h: number | null }>();
+      const kitConfig = kitRow?.config;
       const { rendered, dropped } = await generateAndRender(env, ctx, {
         format: fmtRow ?? { ...ogFormat, safe_w: null, safe_h: null },
         brief: String(form.get('brief') ?? '').trim(),
         n: Math.max(2, Math.min(20, Number(form.get('n') ?? 8))),
-        kitConfig: kitConfig?.config,
+        kitConfig,
       });
-      return Astro.redirect(`/projects/${slug}/design?gen=${rendered}+rendered,+${dropped}+dropped`);
+      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}gen=${rendered}+rendered,+${dropped}+dropped`);
     } else if (action === 'save-template') {
       await saveTemplate(env, ctx, String(form.get('design') ?? ''), String(form.get('name') ?? ''));
-      return Astro.redirect(`/projects/${slug}/design?gen=template+saved`);
+      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}gen=template+saved`);
     } else {
-      // 'render' — a gallery card's Use button; the words travel in the same form.
+      // 'render' — a gallery card's Use button. Words come from the project
+      // (Settings is the one place to edit them); scope rides the render.
       const layoutId = String(form.get('layout') ?? '');
       if (!layoutId) throw new Error('Click Use on one of the layout cards to render it.');
-      const themes = form.getAll('theme').map(String).filter((t) => t === 'light' || t === 'dark') as
-        ('light' | 'dark')[];
-      const leadId = await renderFromLayout(env, ctx, {
+      const leadNew = await renderFromLayout(env, ctx, {
         layoutId,
         formats: [ogFormat],
-        themes: themes.length ? themes : ['light'],
-        title: String(form.get('title') ?? ''),
-        kicker: String(form.get('kicker') ?? ''),
-        tagline: String(form.get('tagline') ?? ''),
+        themes: [scopeTheme],
+        styleId: scopeStyle?.id,
+        shotPosition: scopeShot ?? undefined,
+        title: project.title ?? undefined,
+        kicker: project.kicker ?? undefined,
+        tagline: project.tagline ?? undefined,
       });
-      return Astro.redirect(`/projects/${slug}/design${leadId ? `?lead=${leadId}` : ''}`);
+      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}lead=${leadNew}`);
     }
   } catch (e) {
     error = (e as Error).message;
   }
 }
 
-// Archiving a layout retires its designs from this page too — they stay in the
-// database (nothing that ran ever disappears) and come back with ?versions=all.
-const showAllVersions = Astro.url.searchParams.get('versions') === 'all';
+// Archived-layout designs stay retired unless asked for; superseded rows never show.
+const showAllVersions = q.get('versions') === 'all';
 const designs = await env.DB.prepare(
   `SELECT d.id, d.collection_id, d.title, d.tagline, d.kicker, d.r2_key, d.thumb_key, d.width, d.height, d.created_at,
           d.effect, d.theme, l.name AS layout_name, l.team_id AS layout_team_id, l.id AS layout_id,
@@ -177,12 +208,27 @@ const designs = await env.DB.prepare(
   }>();
 
 type DesignRow = (typeof designs.results)[number];
-const leadId = Astro.url.searchParams.get('lead');
+const leadId = q.get('lead');
 const lead: DesignRow | undefined =
   designs.results.find((d) => d.id === leadId) ?? designs.results[0];
 const versions = designs.results.filter((d) => d.id !== lead?.id);
+// The lead's set: its collection siblings, as one-click format switches.
+const leadSiblings = lead?.collection_id
+  ? designs.results.filter((d) => d.collection_id === lead.collection_id && d.id !== lead.id)
+  : [];
+// Versions grouped: one entry per collection (newest-first), solos as themselves.
+const versionGroups: { key: string; label: string; theme: string; rows: DesignRow[] }[] = [];
+{
+  const seen = new Set<string>();
+  for (const d of versions) {
+    const key = d.collection_id ?? `solo-${d.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const rows = d.collection_id ? versions.filter((v) => v.collection_id === d.collection_id) : [d];
+    versionGroups.push({ key, label: d.layout_name, theme: d.theme, rows });
+  }
+}
 
-// The lead's panels, for "download the raw picture without the design".
 const leadPanels = lead
   ? (
       await env.DB.prepare(
@@ -195,8 +241,11 @@ const leadPanels = lead
     ).results.filter((p) => p.art_key)
   : [];
 
-// Cached previews (possibly stale — the page paints them instantly, then the
-// inline script asks the API to refresh each one; a hash match costs nothing).
+// Cached previews, keyed exactly like the refresh API composes its refs.
+const scopeSuffix =
+  (scopeStyle ? `@s-${scopeStyle.slug}` : '') +
+  (scopeShot != null ? `@p-${scopeShot}` : '') +
+  (scopeTheme === 'dark' ? '@t-dark' : '');
 const previewRows = await env.DB.prepare(
   `SELECT kind, ref_id, r2_key FROM preview WHERE project_id = ?1`,
 )
@@ -210,30 +259,11 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
     <p class="kicker"><span class="g">/</span>{project.name}</p>
     <h1>Design</h1>
     <p class="sub">
-      Every card below is rendered with this project's real pictures, for $0.00 — see it,
-      then click the one you want. Fine control lives in
-      <a href={`/projects/${slug}/design/editor`}>the editor</a>.
+      Pick a picture and a style below — every template renders with YOUR choice, free.
+      Fine control lives in <a href={`/projects/${slug}/design/editor`}>the editor</a>;
+      words and kit live in <a href={`/projects/${slug}/settings`}>settings</a>.
     </p>
   </div>
-
-  <p class="pack-bar">
-    {
-      (project as unknown as { pack_token: string | null }).pack_token ? (
-        <>
-          <span class="kicker"><span class="g">/</span>Pack</span>
-          <a class="mono" href={`/pack/${(project as unknown as { pack_token: string }).pack_token}`} target="_blank">
-            {`${env.PUBLIC_ORIGIN}/pack/${(project as unknown as { pack_token: string }).pack_token.slice(0, 10)}…`}
-          </a>
-          <span class="faint">— the whole concept behind one link, for the social generator. Add .json for machines.</span>
-        </>
-      ) : (
-        <form method="post">
-          <input type="hidden" name="action" value="pack-link" />
-          <button class="btn small ghost" type="submit"><Icon name="pack" />Create pack link</button>
-        </form>
-      )
-    }
-  </p>
 
   {error && <p class="flash">{error}</p>}
   {genNote && <p class="flash">{genNote} — every render was $0.00. Keep the good ones, ignore the rest.</p>}
@@ -246,34 +276,60 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
       </p>
     ) : (
       <>
-        {
-          bundle.styles.length > 1 && (
-            <section class="pv-section">
-              <p class="kicker"><span class="g">/</span>The styles, finished — one OG card each, refreshed after every run</p>
-              <div class="pv-grid pv-styles">
-                {bundle.styles.map((s) => (
-                  <figure class="pv-card">
-                    <img
-                      data-pv-kind="style"
-                      data-pv-ref={s.id}
-                      src={previewKey.has(`style:${s.id}`) ? `/img/${previewKey.get(`style:${s.id}`)}` : undefined}
-                      alt={`${s.name} preview`}
-                      loading="lazy"
-                    />
-                    <figcaption>
-                      <b>{s.name}</b>
-                      {s.id === project.default_style_id && <em class="chip">primary</em>}
-                    </figcaption>
-                  </figure>
-                ))}
-              </div>
-            </section>
-          )
-        }
+        <section class="scope card">
+          <p class="kicker"><span class="g">/</span>Working with — the picture and look every card below uses</p>
+          <div class="scope-row">
+            <span class="scope-label mono">picture</span>
+            <a class:list={['chip', { on: scopeShot == null }]} href={scoped({ shot: null })}>all shots</a>
+            {panels.map((p) => (
+              <span class:list={['shot-chip', { hidden: !!p.hidden }]}>
+                <a
+                  class:list={['chip', 'chip-img', { on: scopeShot === p.position }]}
+                  href={scoped({ shot: String(p.position) })}
+                  title={p.hidden ? 'hidden — not feeding designs' : undefined}
+                >
+                  {p.art_thumb_key && <img src={`/img/${p.art_thumb_key}`} alt="" loading="lazy" />}
+                  {p.label ?? `shot ${p.position}`}
+                </a>
+                <form method="post" class="hide-form">
+                  <input type="hidden" name="action" value={p.hidden ? 'unhide-shot' : 'hide-shot'} />
+                  <input type="hidden" name="position" value={p.position} />
+                  <button class="eye" type="submit" title={p.hidden ? 'unhide this shot' : 'hide this shot from designs'}>
+                    <Icon name={p.hidden ? 'watch' : 'hide'} />{p.hidden ? 'unhide' : 'hide'}
+                  </button>
+                </form>
+              </span>
+            ))}
+          </div>
+          {bundle.styles.length > 1 && (
+            <div class="scope-row">
+              <span class="scope-label mono">style</span>
+              <a class:list={['chip', { on: !scopeStyle }]} href={scoped({ style: null })}>any style</a>
+              {bundle.styles.map((s) => (
+                <a class:list={['chip', { on: scopeStyle?.id === s.id }]} href={scoped({ style: s.slug })}>
+                  {s.name}{s.id === project.default_style_id ? ' ·  primary' : ''}
+                </a>
+              ))}
+            </div>
+          )}
+          {kitHasDark && (
+            <div class="scope-row">
+              <span class="scope-label mono">theme</span>
+              <a class:list={['chip', { on: scopeTheme === 'light' }]} href={scoped({ theme: null })}>light</a>
+              <a class:list={['chip', { on: scopeTheme === 'dark' }]} href={scoped({ theme: 'dark' })}>dark</a>
+            </div>
+          )}
+          <p class="scope-note mono">
+            {scopeShot != null || scopeStyle
+              ? `Scoped: ${scopeShot != null ? (panels.find((p) => p.position === scopeShot)?.label ?? `shot ${scopeShot}`) : 'all shots'} · ${scopeStyle?.name ?? 'any style'} — ${usable.length} template${usable.length === 1 ? '' : 's'} fit. This URL is the package: bookmark it, switch by clicking.`
+              : `${usableSlots} of ${panels.length} shots feeding designs (${pickedCount} picked) — scope to one to work on it.`}
+          </p>
+        </section>
 
         {
           lead && (
             <section class="lead">
+              <p class="kicker"><span class="g">/</span>Current card{leadSiblings.length ? ' — one click switches format' : ''}</p>
               <figure class="lead-card">
                 <a href={`/img/${lead.r2_key}`} target="_blank">
                   <img src={`/img/${lead.r2_key}`} alt={lead.format_name} />
@@ -284,11 +340,18 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
                     {lead.format_slug} · {lead.width}×{lead.height}{lead.effect ? ` · ${lead.effect}` : ''}
                     {lead.theme === 'dark' ? ' · dark' : ''}
                   </span>
+                  {leadSiblings.length > 0 && (
+                    <span class="fmt-chips">
+                      {leadSiblings.map((d) => (
+                        <a class="chip" href={scoped({}) + (scoped({}).includes('?') ? '&' : '?') + `lead=${d.id}`}>{d.format_slug}</a>
+                      ))}
+                    </span>
+                  )}
                   <span class="lead-actions">
                     <form method="post">
                       <input type="hidden" name="action" value="all-formats" />
                       <input type="hidden" name="design" value={lead.id} />
-                      <button class="btn small" type="submit" data-running="Rendering…"><Icon name="run" />All {formats.results.length} formats · $0.00</button>
+                      <button class="btn small" type="submit" data-running="Rendering…"><Icon name="run" />All {formats.results.length} formats</button>
                     </form>
                     <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}><Icon name="watch" />Preview</a>
                     <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${lead.layout_id}&design=${lead.id}`}><Icon name="edit" />Open in editor</a>
@@ -313,72 +376,45 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
           )
         }
 
-        <form method="post" class="design-form card">
-          <p class="inventory mono">
-            Working with {panels.length} image{panels.length === 1 ? '' : 's'}
-            ({pickedCount} picked{pickedCount < panels.length ? ', the rest are the newest drafts — picking on the shots page upgrades them' : ''})
-            — {panels.map((p) => p.label ?? `shot ${p.position}`).join(' · ')}
-          </p>
-          <div class="opts-row">
-            <label class="field">
-              <span>Brand kit</span>
-              <select id="kit-select" name="kit">
-                {kits.results.map((k) => (
-                  <option value={k.id} selected={k.id === project.brand_kit_id}>
-                    {k.name}{k.kind === 'house' ? ' (house)' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label class="field">
-              <span>Title — *word* renders in the kit's accent <i class="accent-swatch" style={`background:${accentHex}`} title={accentHex}></i></span>
-              <input type="text" name="title" value={project.title ?? ''} /></label>
-            <label class="field"><span>Kicker (label above) — usually not with a tagline</span>
-              <input type="text" name="kicker" value={project.kicker ?? ''} /></label>
-            <label class="field"><span>Tagline (sentence below)</span>
-              <input type="text" name="tagline" value={project.tagline ?? ''} /></label>
-            <fieldset class="field theme-field">
-              <span>Theme{kitHasDark ? '' : ' — this kit has no dark palette yet; dark renders identical'}</span>
-              <label class="inline-check"><input type="checkbox" name="theme" value="light" checked /> light</label>
-              <label class="inline-check"><input type="checkbox" name="theme" value="dark" /> dark</label>
-            </fieldset>
-          </div>
-          <script is:inline>
-            // Changing the kit re-renders every preview — a page round-trip, kept honest.
-            document.getElementById('kit-select')?.addEventListener('change', (e) => {
-              const f = e.target.form;
-              const a = document.createElement('input');
-              a.type = 'hidden'; a.name = 'action'; a.value = 'set-kit';
-              f.appendChild(a);
-              f.requestSubmit();
-            });
-          </script>
-
-          <p class="kicker gallery-kicker"><span class="g">/</span>The layouts, with your pictures — click Use to make it a real card (OG format; more from the lead)</p>
-          <div class="pv-grid pv-layouts">
-            {usable.map((l) => (
-              <figure class="pv-card">
-                <img
-                  data-pv-kind="layout"
-                  data-pv-ref={l.id}
-                  src={previewKey.has(`layout:${l.id}`) ? `/img/${previewKey.get(`layout:${l.id}`)}` : undefined}
-                  alt={`${l.name} preview`}
-                  loading="lazy"
-                />
-                <figcaption>
-                  <b>{l.name}</b>
-                  <span class="mono faint">{l.needs} image{l.needs === 1 ? '' : 's'}</span>
-                  <button class="btn small" type="submit" name="layout" value={l.id} data-running="Rendering…">
-                    <Icon name="run" />Use · $0.00
-                  </button>
-                </figcaption>
-              </figure>
-            ))}
-          </div>
-          {usable.length === 0 && (
-            <p class="sub">No layout fits yet — every layout needs at least one image per panel.</p>
-          )}
-        </form>
+        {[
+          { title: 'Your templates', items: teamTemplates },
+          { title: 'House layouts', items: houseLayouts },
+        ].map(
+          (group) =>
+            group.items.length > 0 && (
+              <section class="gallery">
+                <p class="kicker">
+                  <span class="g">/</span>{group.title} — with your picture; click Use to make a real card, free
+                </p>
+                <div class="pv-grid pv-layouts">
+                  {group.items.map((l) => (
+                    <figure class="pv-card">
+                      <img
+                        data-pv-kind="layout"
+                        data-pv-ref={l.id}
+                        src={previewKey.has(`layout:${l.id}${scopeSuffix}`) ? `/img/${previewKey.get(`layout:${l.id}${scopeSuffix}`)}` : undefined}
+                        alt={`${l.name} preview`}
+                        loading="lazy"
+                      />
+                      <figcaption>
+                        <b>{l.name}</b>
+                        <span class="mono faint">uses {l.uses.join(' · ') || `${l.needs} image${l.needs === 1 ? '' : 's'}`}</span>
+                        <form method="post" class="use-form">
+                          <input type="hidden" name="action" value="render" />
+                          <button class="btn small" type="submit" name="layout" value={l.id} data-running="Rendering…">
+                            <Icon name="run" />Use
+                          </button>
+                        </form>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </section>
+            ),
+        )}
+        {usable.length === 0 && (
+          <p class="sub">No template fits this scope — unhide a shot or clear the scope above.</p>
+        )}
 
         <form method="post" class="design-form card generate-form">
           <input type="hidden" name="action" value="generate" />
@@ -417,26 +453,33 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
         </form>
 
         {
-          versions.length > 0 && (
+          versionGroups.length > 0 && (
             <section class="versions">
               <p class="kicker">
-                <span class="g">/</span>Versions — click one to lead
+                <span class="g">/</span>Versions — grouped by render set; click one to lead
                 {showAllVersions ? (
-                  <a href="?">hide retired</a>
+                  <a href={scoped({ versions: null })}>hide retired</a>
                 ) : (
-                  <a href="?versions=all">show retired too</a>
+                  <a href={scoped({ versions: 'all' })}>show retired too</a>
                 )}
               </p>
-              <div class="designs-grid">
-                {versions.map((d) => (
-                  <figure class="design-card">
-                    <a href={`/projects/${slug}/design?lead=${d.id}`}>
-                      <img src={`/img/${d.thumb_key}`} alt={d.format_name} loading="lazy" />
+              <div class="vgroups">
+                {versionGroups.map((g) => (
+                  <figure class="vgroup design-card">
+                    <a href={scoped({}) + (scoped({}).includes('?') ? '&' : '?') + `lead=${g.rows[0]!.id}`}>
+                      <img src={`/img/${g.rows[0]!.thumb_key}`} alt={g.label} loading="lazy" />
                     </a>
                     <figcaption>
-                      <span>{d.layout_name}</span>
-                      <span class="mono faint">{d.format_slug}{d.theme === 'dark' ? ' · dark' : ''}</span>
-                      <a class="btn small ghost" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}.png`} title="Download"><Icon name="download" />PNG</a>
+                      <span>{g.label}</span>
+                      <span class="mono faint">{g.theme === 'dark' ? 'dark · ' : ''}{g.rows.length === 1 ? g.rows[0]!.format_slug : `${g.rows.length} formats`}</span>
+                      {g.rows.length > 1 && (
+                        <span class="fmt-chips">
+                          {g.rows.map((d) => (
+                            <a class="chip" href={scoped({}) + (scoped({}).includes('?') ? '&' : '?') + `lead=${d.id}`}>{d.format_slug}</a>
+                          ))}
+                        </span>
+                      )}
+                      <a class="btn small ghost" href={`/img/${g.rows[0]!.r2_key}`} download={`${slug}-${g.rows[0]!.format_slug}.png`} title="Download"><Icon name="download" />PNG</a>
                     </figcaption>
                   </figure>
                 ))}
@@ -445,30 +488,64 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
           )
         }
 
-        <script is:inline define:vars={{ slug }}>
-          // Refresh every preview card: fresh ones answer instantly from the hash
-          // check; stale/missing ones render once, then the image swaps in.
+        <p class="pack-bar">
+          {
+            (project as unknown as { pack_token: string | null }).pack_token ? (
+              <>
+                <span class="kicker"><span class="g">/</span>Pack</span>
+                <a class="mono" href={`/pack/${(project as unknown as { pack_token: string }).pack_token}`} target="_blank">
+                  {`${env.PUBLIC_ORIGIN}/pack/${(project as unknown as { pack_token: string }).pack_token.slice(0, 10)}…`}
+                </a>
+                <span class="faint">— the whole concept behind one link, for the social generator. Add .json for machines.</span>
+              </>
+            ) : (
+              <form method="post">
+                <input type="hidden" name="action" value="pack-link" />
+                <button class="btn small ghost" type="submit"><Icon name="pack" />Create pack link</button>
+              </form>
+            )
+          }
+          <span class="faint">Kit: {kitRow?.name ?? '?'} · words: “{project.title ?? '—'}” — <a href={`/projects/${slug}/settings`}>change in settings</a></span>
+        </p>
+
+        <script is:inline define:vars={{ slug, scopeStyle: scopeStyle?.slug ?? null, scopeShot, scopeTheme }}>
+          // Refresh every preview card under the CURRENT scope. Cached images
+          // paint instantly but wear a "checking" shimmer until the API
+          // confirms they're fresh for this exact scope.
           (() => {
             const imgs = [...document.querySelectorAll('img[data-pv-kind]')];
             const queue = [...imgs];
-            imgs.forEach((i) => { if (!i.getAttribute('src')) i.closest('.pv-card')?.classList.add('pv-loading'); });
+            imgs.forEach((i) => {
+              i.closest('.pv-card')?.classList.add(i.getAttribute('src') ? 'pv-checking' : 'pv-loading');
+            });
             let active = 0;
             const MAX = 3;
             const pump = () => {
               while (active < MAX && queue.length) {
                 const img = queue.shift();
                 active++;
+                const body = { kind: img.dataset.pvKind, ref: img.dataset.pvRef };
+                if (img.dataset.pvKind === 'layout') {
+                  if (scopeStyle) body.style = scopeStyle;
+                  if (scopeShot != null) body.shot = scopeShot;
+                  if (scopeTheme === 'dark') body.theme = 'dark';
+                }
                 fetch(`/api/projects/${slug}/previews`, {
                   method: 'POST',
                   headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ kind: img.dataset.pvKind, ref: img.dataset.pvRef }),
+                  body: JSON.stringify(body),
                 })
-                  .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+                  .then((r) => (r.ok ? r.json() : r.json().then((e) => Promise.reject(new Error(e?.error ?? r.status)))))
                   .then((d) => {
                     if (img.getAttribute('src') !== d.url) img.src = d.url;
-                    img.closest('.pv-card')?.classList.remove('pv-loading', 'pv-failed');
+                    img.closest('.pv-card')?.classList.remove('pv-loading', 'pv-checking', 'pv-failed');
                   })
-                  .catch(() => img.closest('.pv-card')?.classList.add('pv-failed'))
+                  .catch((e) => {
+                    const card = img.closest('.pv-card');
+                    card?.classList.remove('pv-loading', 'pv-checking');
+                    card?.classList.add('pv-failed');
+                    if (card) card.title = String(e.message ?? 'preview unavailable');
+                  })
                   .finally(() => { active--; pump(); });
               }
             };
@@ -485,44 +562,56 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
   .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
   .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
   .form-grid > * { min-width: 0; }
-  .pack-bar { display: flex; gap: 0.8rem; align-items: baseline; margin-bottom: 1.4rem; flex-wrap: wrap; font-size: 0.85rem; }
+
+  .scope { margin-bottom: 1.6rem; padding: 0.9rem 1.1rem; }
+  .scope .kicker { margin-bottom: 0.7rem; }
+  .scope-row { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+  .scope-label { color: var(--faint); font-size: 0.72rem; min-width: 3.4rem; text-transform: uppercase; letter-spacing: 0.08em; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    border: 1px solid var(--line); border-radius: 999px; padding: 0.18rem 0.65rem;
+    font-size: 0.8rem; color: var(--mute); text-decoration: none; background: var(--surface);
+  }
+  .chip.on { border-color: var(--red); color: var(--ink); background: var(--surface-2); }
+  .chip-img img { width: 1.7rem; height: 1.15rem; object-fit: cover; border-radius: 3px; display: block; }
+  .shot-chip { display: inline-flex; align-items: center; gap: 0.15rem; }
+  .shot-chip.hidden .chip { opacity: 0.45; }
+  .hide-form { display: inline; }
+  .eye { background: none; border: 0; color: var(--faint); font-size: 0.68rem; cursor: pointer; padding: 0.1rem 0.25rem; }
+  .eye:hover { color: var(--ink); }
+  .scope-note { color: var(--faint); font-size: 0.74rem; margin: 0.3rem 0 0; }
+
+  .pack-bar { display: flex; gap: 0.8rem; align-items: baseline; margin: 2rem 0 1rem; flex-wrap: wrap; font-size: 0.85rem; }
   .pack-bar .faint { color: var(--faint); }
   .lead { margin-bottom: 2rem; }
+  .lead .kicker { margin-bottom: 0.8rem; }
   .lead-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; max-width: 64rem; }
   .lead-card img { display: block; width: 100%; height: auto; }
   .lead-card figcaption { display: flex; align-items: center; gap: 0.9rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
   .lead-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .fmt-chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
   .save-template { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.3rem; }
   .save-template input[type=text] { font-size: 0.82rem; padding: 0.35rem 0.55rem; max-width: 22rem; }
-  fieldset { border: 0; }
-  .inline-check { display: inline-flex; gap: 0.4rem; align-items: center; margin-right: 1.2rem; color: var(--mute); font-size: 0.9rem; }
-  .accent-swatch {
-    display: inline-block; width: 0.85em; height: 0.85em; border-radius: 3px;
-    vertical-align: -0.1em; border: 1px solid var(--line);
-  }
 
-  .pv-section { margin-bottom: 2rem; }
-  .pv-section .kicker, .gallery-kicker { margin-bottom: 0.8rem; }
+  .gallery { margin-bottom: 1.8rem; }
+  .gallery .kicker { margin-bottom: 0.8rem; }
   .pv-grid { display: grid; gap: 0.9rem; }
   .pv-grid > * { min-width: 0; }
-  .pv-styles { grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); }
   .pv-layouts { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
   .pv-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 0; }
   .pv-card img { display: block; width: 100%; aspect-ratio: 1200 / 630; height: auto; object-fit: cover; background: var(--surface-2); }
   .pv-card figcaption { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.7rem; font-size: 0.8rem; flex-wrap: wrap; }
-  .pv-card figcaption .btn { margin-left: auto; }
+  .pv-card figcaption .use-form { margin-left: auto; }
   .pv-loading img { opacity: 0.35; }
   .pv-loading::after { content: 'rendering…'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
-  .pv-failed::after { content: 'preview unavailable'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
-
-  .opts-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0 1rem; margin-bottom: 0.6rem; }
-  .opts-row > * { min-width: 0; }
-  .theme-field { padding-top: 0.2rem; }
+  .pv-checking img { opacity: 0.75; }
+  .pv-checking::after { content: 'checking…'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
+  .pv-failed::after { content: 'preview unavailable — hover for why'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
 
   .versions .kicker { margin-bottom: 0.8rem; }
-  .designs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.9rem; }
-  .designs-grid > * { min-width: 0; }
-  .design-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .vgroups { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 0.9rem; }
+  .vgroups > * { min-width: 0; }
+  .design-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 0; }
   .design-card img { display: block; width: 100%; height: auto; }
   figcaption { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.7rem; font-size: 0.8rem; flex-wrap: wrap; }
   .faint { color: var(--faint); }
