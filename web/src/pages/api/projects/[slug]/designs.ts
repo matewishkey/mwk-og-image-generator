@@ -36,6 +36,9 @@ export const POST: APIRoute = async (ctx) => {
     title?: string;
     kicker?: string;
     tagline?: string;
+    theme?: 'light' | 'dark';
+    style?: string;
+    shot?: number;
   }>(ctx.request);
   if (!body?.config && !body?.layoutId)
     return err(400, 'send { config } (author a template) or { layoutId } (render an existing layout)');
@@ -55,6 +58,7 @@ export const POST: APIRoute = async (ctx) => {
 
   try {
     if (body.config) {
+      const scopeStyle = body.style ? bundle.styles.find((st) => st.slug === body.style) : undefined;
       const { designId, layoutId } = await authorTemplate(ENV, dctx, {
         config: body.config,
         name: body.name,
@@ -62,6 +66,10 @@ export const POST: APIRoute = async (ctx) => {
         title: body.title,
         kicker: body.kicker,
         tagline: body.tagline,
+        theme: body.theme === 'dark' ? 'dark' : undefined,
+        effect: body.effect,
+        styleId: scopeStyle?.id,
+        shotPosition: Number.isInteger(body.shot) ? Number(body.shot) : undefined,
       });
       return ok(
         {

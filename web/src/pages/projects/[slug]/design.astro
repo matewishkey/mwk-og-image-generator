@@ -13,6 +13,7 @@ import {
   generateAndRender,
   renderAllFormats,
   renderFromLayout,
+  reviseDesign,
   saveTemplate,
 } from '../../../lib/design-actions';
 import { resolvePanelTakes, scopeInventory } from '../../../lib/previews';
@@ -144,6 +145,14 @@ if (Astro.request.method === 'POST') {
         .bind(action === 'hide-shot' ? new Date().toISOString() : null, project.id, pos)
         .run();
       return Astro.redirect(back);
+    } else if (action === 'revise') {
+      const newLead = await reviseDesign(env, ctx, {
+        designId: String(form.get('design') ?? ''),
+        instruction: String(form.get('instruction') ?? ''),
+        styleId: scopeStyle?.id,
+        shotPosition: scopeShot ?? undefined,
+      });
+      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}lead=${newLead}`);
     } else if (action === 'all-formats') {
       await renderAllFormats(env, ctx, String(form.get('design') ?? ''), formats.results);
       return Astro.redirect(back);
@@ -354,7 +363,7 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
                       <button class="btn small" type="submit" data-running="Rendering…"><Icon name="run" />All {formats.results.length} formats</button>
                     </form>
                     <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}><Icon name="watch" />Preview</a>
-                    <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${lead.layout_id}&design=${lead.id}`}><Icon name="edit" />Open in editor</a>
+                    <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${lead.layout_id}&design=${lead.id}${scopeQs ? `&${scopeQs}` : ''}`}><Icon name="edit" />Open in editor</a>
                     <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}><Icon name="download" />Download</a>
                     {leadPanels.map((p) => (
                       <a class="btn small ghost" href={`/img/${p.art_key}`} download={`${slug}-${p.label ?? `panel-${p.position}`}-raw.png`}>
@@ -362,6 +371,18 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
                       </a>
                     ))}
                   </span>
+                  <form method="post" class="revise-form">
+                    <input type="hidden" name="action" value="revise" />
+                    <input type="hidden" name="design" value={lead.id} />
+                    <input
+                      type="text"
+                      name="instruction"
+                      placeholder="tell it what to change — e.g. move the text left, my picture a little right"
+                    />
+                    <button class="btn small" type="submit" data-running="Revising — ~20 seconds…">
+                      <Icon name="cowrite" />Change it · under a cent
+                    </button>
+                  </form>
                   {lead.layout_team_id === team.id && (
                     <form method="post" class="save-template">
                       <input type="hidden" name="action" value="save-template" />
@@ -590,6 +611,8 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
   .lead-card figcaption { display: flex; align-items: center; gap: 0.9rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
   .lead-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
   .fmt-chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+  .revise-form { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.5rem; }
+  .revise-form input[type=text] { flex: 1; font-size: 0.85rem; padding: 0.4rem 0.6rem; }
   .save-template { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.3rem; }
   .save-template input[type=text] { font-size: 0.82rem; padding: 0.35rem 0.55rem; max-width: 22rem; }
 

@@ -32,20 +32,25 @@ export interface EditorProps {
   initialName: string;
   kitHasDark: boolean;
   pickCount: number;
+  /** The design page's working scope, carried through so the editor shows the SAME picture. */
+  scope: { shot: number | null; style: string | null };
+  initialFormatId?: string;
+  initialTheme: 'light' | 'dark';
+  initialEffect: string;
 }
 
 export default function LayoutEditor(p: { initial: EditorProps }) {
-  const { slug, layouts, formats, effects, defaults, kitHasDark, pickCount } = p.initial;
+  const { slug, layouts, formats, effects, defaults, kitHasDark, pickCount, scope } = p.initial;
   const api = makeApi(slug);
 
   const [cfg, setCfg] = useState<Cfg>(p.initial.initialConfig);
   const [name, setName] = useState(p.initial.initialName);
-  const [formatId, setFormatId] = useState(formats[0]?.id ?? '');
+  const [formatId, setFormatId] = useState(p.initial.initialFormatId ?? formats[0]?.id ?? '');
   const [title, setTitle] = useState(defaults.title);
   const [kicker, setKicker] = useState(defaults.kicker);
   const [tagline, setTagline] = useState(defaults.tagline);
-  const [effect, setEffect] = useState('');
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [effect, setEffect] = useState(p.initial.initialEffect);
+  const [theme, setTheme] = useState<'light' | 'dark'>(p.initial.initialTheme);
   const [previewUrl, setPreviewUrl] = useState('');
   const [previewErr, setPreviewErr] = useState('');
   const [rendering, setRendering] = useState(false);
@@ -61,10 +66,16 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
     const mySeq = ++seq.current;
     setRendering(true);
     try {
+      const fmt = formats.find((f) => f.id === formatId);
       const res = await fetch(`/api/projects/${slug}/preview-layout`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ config: cfg, title, kicker, tagline, effect: effect || undefined, theme, width: 720 }),
+        body: JSON.stringify({
+          config: cfg, title, kicker, tagline, effect: effect || undefined, theme, width: 720,
+          formatWidth: fmt?.width, formatHeight: fmt?.height,
+          style: scope.style ?? undefined,
+          shot: scope.shot ?? undefined,
+        }),
       });
       if (mySeq !== seq.current) return; // a newer render superseded this one
       if (!res.ok) {
@@ -89,7 +100,7 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
     clearTimeout(debounce.current);
     debounce.current = window.setTimeout(() => void renderPreview(), 600);
     return () => clearTimeout(debounce.current);
-  }, [JSON.stringify(cfg), title, kicker, tagline, effect, theme]);
+  }, [JSON.stringify(cfg), title, kicker, tagline, effect, theme, formatId]);
 
   const patch = (up: Partial<Cfg>) => setCfg((c) => ({ ...c, ...up }));
   const patchItem = (list: 'cells' | 'texts' | 'shapes', i: number, up: Record<string, unknown>) =>
@@ -125,6 +136,10 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
         title: title || undefined,
         kicker: kicker || undefined,
         tagline: tagline || undefined,
+        theme: theme === 'dark' ? 'dark' : undefined,
+        effect: effect || undefined,
+        style: scope.style ?? undefined,
+        shot: scope.shot ?? undefined,
       })) as { designId: string };
       location.href = `/projects/${slug}/design?lead=${r.designId}`;
     } catch (e) {
@@ -132,6 +147,36 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
       setSaving(false);
     }
   };
+
+  // ---------- drag-to-move on the preview ----------
+  const previewBox = useRef<HTMLDivElement>(null);
+  const drag = useRef<{
+    list: 'cells' | 'texts' | 'shapes'; i: number;
+    startX: number; startY: number; origX: number; origY: number;
+  } | null>(null);
+  const startDrag = (list: 'cells' | 'texts' | 'shapes', i: number, e: PointerEvent) => {
+    const item = (cfg[list] as Record<string, unknown>[] | undefined)?.[i];
+    if (!item) return;
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    drag.current = {
+      list, i, startX: e.clientX, startY: e.clientY,
+      origX: typeof item.x === 'number' ? item.x : 0,
+      origY: typeof item.y === 'number' ? item.y : 0,
+    };
+  };
+  const moveDrag = (e: PointerEvent) => {
+    const d = drag.current;
+    const box = previewBox.current?.getBoundingClientRect();
+    if (!d || !box || box.width === 0) return;
+    const round = (n: number) => Math.round(n * 200) / 200; // 0.005 steps
+    const item = (cfg[d.list] as Record<string, unknown>[])[d.i]!;
+    const w = typeof item.w === 'number' ? item.w : 1;
+    const x = Math.max(0, Math.min(1 - Math.min(w, 1), d.origX + (e.clientX - d.startX) / box.width));
+    const y = Math.max(0, Math.min(0.98, d.origY + (e.clientY - d.startY) / box.height));
+    patchItem(d.list, d.i, { x: round(x), y: round(y) });
+  };
+  const endDrag = () => { drag.current = null; };
 
   const num = (v: unknown, d = 0) => (typeof v === 'number' ? v : d);
   const str = (v: unknown, d = '') => (typeof v === 'string' ? v : d);
@@ -354,12 +399,37 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
       </div>
 
       <div class="le-preview">
-        <p class="ws-mini">Live preview — your real picks, re-rendered on every change{rendering ? ' · rendering…' : ''}</p>
-        {previewErr
-          ? <p class="flash">{previewErr}</p>
-          : previewUrl
-            ? <img src={previewUrl} alt="layout preview" />
-            : <p class="sub">rendering the first preview…</p>}
+        <p class="ws-mini">
+          Live preview — your real picks, re-rendered on every change
+          {freeform ? ' · drag any box to move it' : ''}{rendering ? ' · rendering…' : ''}
+        </p>
+        {previewErr && <p class="flash">{previewErr}</p>}
+        {previewUrl ? (
+          <div class="le-stage" ref={previewBox} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
+            <img src={previewUrl} alt="layout preview" draggable={false} />
+            {freeform &&
+              (['cells', 'texts', 'shapes'] as const).map((list) =>
+                ((cfg[list] as Record<string, unknown>[] | undefined) ?? []).map((it, i) => (
+                  <div
+                    class={`le-handle le-h-${list}`}
+                    style={{
+                      left: `${num(it.x) * 100}%`,
+                      top: `${num(it.y) * 100}%`,
+                      width: `${Math.max(num(it.w, list === 'texts' ? 0.9 : 1), 0.06) * 100}%`,
+                      height: list === 'cells' ? `${Math.max(num(it.h, 1), 0.06) * 100}%`
+                        : list === 'shapes' ? `${Math.max(num(it.h, 0.1), 0.04) * 100}%` : undefined,
+                    }}
+                    onPointerDown={(e) => startDrag(list, i, e as unknown as PointerEvent)}
+                    title={`drag to move ${list.slice(0, -1)} ${i + 1}`}
+                  >
+                    <span>{list === 'texts' ? `text ${i + 1}` : list === 'cells' ? `image ${i + 1}` : `shape ${i + 1}`}</span>
+                  </div>
+                )),
+              )}
+          </div>
+        ) : !previewErr ? (
+          <p class="sub">rendering the first preview…</p>
+        ) : null}
       </div>
     </div>
   );

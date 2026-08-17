@@ -135,6 +135,17 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   hidden shot"), never silently re-casts. Same for style gaps: a shot with no take
   in the scoped style is a null slot, not a dropped row. Don't "optimise" the LEFT
   JOIN back to INNER.
+- **"Change it" (reviseDesign, design-actions.ts): the owner types an instruction on the
+  lead card** ("move the text left"), gpt-5.6-terra revises the layout config through the
+  SAME validated-config loop as generate (brief carries the current config + instruction,
+  n=1), the result lands as a new `rev-*` layout with the same name, the predecessor is
+  archived (team layouts only), and the design re-renders in place. This is the primary
+  editing path — the editor is for fine control, not the default.
+- **The editor carries the design page's scope** (`?shot/&style` on the editor link),
+  previews in the SAVE format's true aspect, starts in the source design's
+  format/theme/effect, and has drag-to-move handles over the live preview (freeform
+  cells/texts/shapes; `.le-stage` in app.css). preview-layout and authorTemplate both go
+  through resolvePanelTakes + scopeInventory + selectPanels — never positional picks.
 - **Re-rendering the same layout+format+theme+effect SUPERSEDES the old design row**
   (createDesign/createCollection close each insert batch with the UPDATE). The design
   page also hides designs whose LAYOUT is archived (`?versions=all` shows them) — so

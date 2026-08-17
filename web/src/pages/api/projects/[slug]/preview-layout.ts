@@ -9,10 +9,11 @@ import { err, readJson } from '../../../../lib/api';
 import { loadProject } from '../../../../lib/data';
 import {
   LayoutConfigSchema,
-  layoutPanels,
   seamHeaders,
+  selectPanels,
   type EngineRenderRequest,
 } from '../../../../../../src/seam.ts';
+import { resolvePanelTakes, scopeInventory } from '../../../../lib/previews';
 import { isEffect } from '../../../../../../src/effects.ts';
 
 interface PreviewBody {
@@ -22,8 +23,14 @@ interface PreviewBody {
   tagline?: string;
   effect?: string;
   theme?: 'light' | 'dark';
-  /** Preview canvas width; height follows the OG ratio. Clamped. */
+  /** Preview canvas width; height follows formatWidth/formatHeight. Clamped. */
   width?: number;
+  /** The target format's true dimensions — the preview keeps its aspect. */
+  formatWidth?: number;
+  formatHeight?: number;
+  /** Scope: style slug + shot position, same semantics as the design page. */
+  style?: string;
+  shot?: number;
 }
 
 export const POST: APIRoute = async (ctx) => {
@@ -40,18 +47,16 @@ export const POST: APIRoute = async (ctx) => {
     return err(400, parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
   const cfg = parsed.data;
 
-  const picks = await ENV.DB.prepare(
-    `SELECT sh.position, sh.label, t.art_key FROM shot sh
-       JOIN take t ON t.id = sh.picked_take_id
-      WHERE sh.project_id = ?1 AND sh.deleted_at IS NULL AND t.art_key IS NOT NULL
-      ORDER BY sh.position`,
-  )
-    .bind(bundle.project.id)
-    .all<{ position: number; label: string | null; art_key: string }>();
-
-  const needed = layoutPanels(cfg);
-  if (picks.results.length < needed)
-    return err(400, `this layout needs ${needed} picks; the project has ${picks.results.length}`);
+  // Same inventory rules as real renders: slot-stable, hidden-aware, honours
+  // explicit cell.panel refs, and takes the page's scope.
+  const scopeStyle = body.style ? bundle.styles.find((st) => st.slug === body.style) : undefined;
+  const takes = await resolvePanelTakes(ENV, bundle.project.id, scopeStyle?.id);
+  let sel;
+  try {
+    sel = selectPanels(cfg, scopeInventory(cfg, takes, Number.isInteger(body.shot) ? Number(body.shot) : undefined));
+  } catch (e) {
+    return err(400, (e as Error).message);
+  }
 
   const kit = await ENV.DB.prepare(`SELECT config, mark_key FROM brand_kit WHERE id = ?1`)
     .bind(bundle.project.brand_kit_id)
@@ -59,7 +64,9 @@ export const POST: APIRoute = async (ctx) => {
   if (!kit) return err(500, 'the project brand kit is missing');
 
   const width = Math.max(300, Math.min(1200, Math.round(body.width ?? 600)));
-  const height = Math.round((width * 630) / 1200);
+  const fw = body.formatWidth && body.formatWidth > 0 ? body.formatWidth : 1200;
+  const fh = body.formatHeight && body.formatHeight > 0 ? body.formatHeight : 630;
+  const height = Math.max(60, Math.min(1600, Math.round((width * fh) / fw)));
 
   const payload: EngineRenderRequest = {
     designId: 'preview',
@@ -78,8 +85,8 @@ export const POST: APIRoute = async (ctx) => {
       kicker: body.kicker?.trim() || undefined,
       tagline: body.tagline?.trim() || undefined,
     },
-    panels: picks.results.slice(0, needed).map((p) => ({
-      key: p.art_key,
+    panels: sel.map((p) => ({
+      key: p.art_key!,
       label: p.label ?? `shot ${p.position}`,
     })),
   };

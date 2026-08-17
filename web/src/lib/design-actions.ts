@@ -293,6 +293,10 @@ export interface AuthorOpts extends RenderWords {
   config: unknown;
   name?: string;
   formatId?: string;
+  theme?: 'light' | 'dark';
+  effect?: string;
+  styleId?: string;
+  shotPosition?: number;
 }
 
 /** Hand-authored config -> validated NEW layout row -> rendered design. */
@@ -306,10 +310,10 @@ export async function authorTemplate(
     throw new Error(
       parsed.error.issues.map((i) => `${i.path.join('.') || 'config'}: ${i.message}`).join('; '),
     );
-  const panels = await projectPanels(env, ctx.project.id);
-  const needs = layoutPanels(parsed.data);
-  if (needs > panels.length)
-    throw new Error(`this template needs ${needs} images; the project has ${panels.length}`);
+  const panels = await scopedProjectPanels(env, ctx.project.id, parsed.data, {
+    styleId: o.styleId,
+    shotPosition: o.shotPosition,
+  });
   const name = o.name?.trim() || 'Hand-authored';
   const layoutId = ulid();
   await env.DB.prepare(
@@ -329,9 +333,135 @@ export async function authorTemplate(
     title: o.title ?? ctx.project.title ?? undefined,
     kicker: o.kicker ?? ctx.project.kicker ?? undefined,
     tagline: o.tagline ?? ctx.project.tagline ?? undefined,
+    theme: o.theme,
+    effect: o.effect && isEffect(o.effect) ? o.effect : undefined,
     panels,
   });
   return { designId, layoutId };
+}
+
+export interface ReviseOpts {
+  designId: string;
+  instruction: string;
+  styleId?: string;
+  shotPosition?: number;
+}
+
+/**
+ * "Move the text left, my picture a bit right" — the owner talks, the model
+ * revises the design's layout config, the renderer redraws it. The revised
+ * config lands as a NEW layout row with the same name; the predecessor is
+ * archived (team layouts only — house layouts are shared and stay), so the
+ * page shows one card, and history keeps everything.
+ */
+export async function reviseDesign(
+  env: Env,
+  ctx: DesignCtx,
+  o: ReviseOpts,
+): Promise<string> {
+  const instruction = o.instruction.trim();
+  if (!instruction) throw new Error('Say what to change — e.g. "move the text left a little".');
+  const src = await env.DB.prepare(
+    `SELECT d.layout_id, d.format_id, d.theme, d.effect, d.title, d.kicker, d.tagline,
+            l.name AS layout_name, l.config, l.team_id AS layout_team_id
+       FROM design d JOIN layout l ON l.id = d.layout_id
+      WHERE d.id = ?1 AND d.team_id = ?2 AND d.project_id = ?3`,
+  )
+    .bind(o.designId, ctx.teamId, ctx.project.id)
+    .first<{ layout_id: string; format_id: string; theme: string; effect: string | null;
+             title: string | null; kicker: string | null; tagline: string | null;
+             layout_name: string; config: string; layout_team_id: string }>();
+  if (!src) throw new Error('no such design');
+
+  const [format, kit, takes] = await Promise.all([
+    env.DB.prepare(`SELECT id, slug, name, width, height, safe_w, safe_h FROM format WHERE id = ?1`)
+      .bind(src.format_id)
+      .first<{ id: string; slug: string; name: string; width: number; height: number;
+               safe_w: number | null; safe_h: number | null }>(),
+    env.DB.prepare(`SELECT config FROM brand_kit WHERE id = ?1`)
+      .bind(ctx.project.brand_kit_id)
+      .first<{ config: string }>(),
+    resolvePanelTakes(env, ctx.project.id),
+  ]);
+  if (!format) throw new Error('the design format is missing');
+  const kitParsed = (() => {
+    try {
+      return JSON.parse(kit?.config ?? '{}') as {
+        colors?: Record<string, string>;
+        band?: { height?: number };
+        canvas?: { height?: number };
+      };
+    } catch {
+      return {};
+    }
+  })();
+
+  const brief =
+    `REVISE the following existing layout — do not invent a new arrangement. ` +
+    `Change ONLY what the instruction asks for; keep every other property byte-identical. ` +
+    `Keep the name exactly "${src.layout_name}".\n` +
+    `Current config:\n${src.config}\n` +
+    `The owner's instruction: "${instruction}"`;
+  const { layouts: revised } = await generateLayouts(
+    env,
+    {
+      panels: takes
+        .filter((t) => !t.hidden && t.take_id)
+        .map((t) => ({ label: t.label ?? `shot ${t.position}`, width: t.width, height: t.height })),
+      format: {
+        name: format.name,
+        width: format.width,
+        height: format.height,
+        safe_w: format.safe_w,
+        safe_h: format.safe_h,
+      },
+      palette: kitParsed.colors,
+      bandFrac:
+        kitParsed.band?.height && kitParsed.canvas?.height
+          ? kitParsed.band.height / kitParsed.canvas.height
+          : undefined,
+    },
+    brief,
+    1,
+  );
+  const next = revised[0];
+  if (!next) throw new Error('the model could not produce a valid revision — try wording the change differently');
+
+  const nowIso = new Date().toISOString();
+  const layoutId = ulid();
+  const stmts = [
+    env.DB.prepare(
+      `INSERT INTO layout (id, team_id, slug, name, config, generated_by, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, 'revise', ?6, ?6)`,
+    ).bind(layoutId, ctx.teamId, `rev-${layoutId.slice(-8).toLowerCase()}`,
+           src.layout_name, JSON.stringify(next.config), nowIso),
+  ];
+  if (src.layout_team_id === ctx.teamId) {
+    stmts.push(
+      env.DB.prepare(`UPDATE layout SET archived_at = ?1, updated_at = ?1 WHERE id = ?2`)
+        .bind(nowIso, src.layout_id),
+    );
+  }
+  await env.DB.batch(stmts);
+
+  const panels = await scopedProjectPanels(env, ctx.project.id, next.config, {
+    styleId: o.styleId,
+    shotPosition: o.shotPosition,
+  });
+  return createDesign(env, {
+    teamId: ctx.teamId,
+    userId: ctx.userId,
+    projectId: ctx.project.id,
+    layoutId,
+    formatId: src.format_id,
+    brandKitId: ctx.project.brand_kit_id,
+    title: src.title ?? undefined,
+    kicker: src.kicker ?? undefined,
+    tagline: src.tagline ?? undefined,
+    theme: src.theme === 'dark' ? 'dark' : 'light',
+    effect: src.effect ?? undefined,
+    panels,
+  });
 }
 
 /** One unguessable pack token per project; creating it twice keeps the first. */

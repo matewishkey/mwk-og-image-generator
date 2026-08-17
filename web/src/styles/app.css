@@ -534,3 +534,24 @@ svg.i { width: 1em; height: 1em; flex: none; vertical-align: -0.125em; }
 .le-save { position: sticky; bottom: 0.5rem; }
 .le-preview { position: sticky; top: 1rem; }
 .le-preview img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+
+/* Layout editor: drag-to-move handles over the live preview (round 6). */
+.le-stage { position: relative; display: inline-block; max-width: 100%; }
+.le-stage img { display: block; max-width: 100%; height: auto; user-select: none; }
+.le-handle {
+  position: absolute; min-height: 1.6rem; box-sizing: border-box;
+  border: 1px dashed color-mix(in srgb, var(--red) 70%, transparent);
+  border-radius: 4px; cursor: grab; touch-action: none;
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+}
+.le-handle:hover { background: color-mix(in srgb, var(--red) 14%, transparent); }
+.le-handle:active { cursor: grabbing; }
+.le-handle span {
+  position: absolute; top: -1.1rem; left: 0; font: 600 0.62rem/1 var(--mono, monospace);
+  color: var(--red); background: var(--surface); padding: 0.1rem 0.3rem; border-radius: 3px;
+  white-space: nowrap; pointer-events: none;
+}
+.le-h-cells { border-style: solid; border-color: color-mix(in srgb, var(--ink) 35%, transparent); background: transparent; }
+.le-h-cells span { color: var(--mute); }
+.le-h-shapes { border-color: color-mix(in srgb, var(--mute) 60%, transparent); background: transparent; }
+.le-h-shapes span { color: var(--faint); }

@@ -7,7 +7,8 @@ import Base from '../../../../layouts/Base.astro';
 import LayoutEditor from '../../../../components/ws/LayoutEditor';
 import { ENV } from '../../../../lib/runtime';
 import { loadProject } from '../../../../lib/data';
-import { LayoutConfigSchema, layoutPanels } from '../../../../../../src/seam.ts';
+import { consumedPanels, LayoutConfigSchema } from '../../../../../../src/seam.ts';
+import { resolvePanelTakes } from '../../../../lib/previews';
 import { EFFECTS } from '../../../../../../src/effects.ts';
 
 const env = ENV;
@@ -18,13 +19,9 @@ const slug = Astro.params.slug!;
 const bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
 
-const picks = await env.DB.prepare(
-  `SELECT count(*) AS n FROM shot sh JOIN take t ON t.id = sh.picked_take_id
-    WHERE sh.project_id = ?1 AND sh.deleted_at IS NULL AND t.art_key IS NOT NULL`,
-)
-  .bind(bundle.project.id)
-  .first<{ n: number }>();
-const pickCount = picks?.n ?? 0;
+const panels = await resolvePanelTakes(env, bundle.project.id);
+const slots = panels.map((p) => (p.hidden || !p.take_id ? null : p));
+const pickCount = slots.filter(Boolean).length;
 
 const layouts = await env.DB.prepare(
   `SELECT l.id, l.name, l.config FROM layout l JOIN team t ON t.id = l.team_id
@@ -35,7 +32,7 @@ const layouts = await env.DB.prepare(
   .all<{ id: string; name: string; config: string }>();
 const usable = layouts.results.filter((l) => {
   const cfg = LayoutConfigSchema.safeParse(JSON.parse(l.config));
-  return cfg.success && layoutPanels(cfg.data) <= pickCount;
+  return cfg.success && consumedPanels(cfg.data).every((i) => slots[i] != null);
 });
 
 const formats = await env.DB.prepare(
@@ -59,6 +56,21 @@ const from = usable.find((l) => l.id === fromId) ?? usable[0];
 const initialConfig = from ? JSON.parse(from.config) : { archetype: 'hero', lockup: 'bottom' };
 const initialName = from ? `${from.name} (edited)` : 'My layout';
 
+// Arriving from a design: start in ITS format/theme/effect, so the editor shows
+// the SAME picture the design page did — scope rides the query string too.
+const designId = Astro.url.searchParams.get('design');
+const designRow = designId
+  ? await env.DB.prepare(
+      `SELECT format_id, theme, effect FROM design WHERE id = ?1 AND project_id = ?2`,
+    )
+      .bind(designId, bundle.project.id)
+      .first<{ format_id: string; theme: string; effect: string | null }>()
+  : null;
+const scope = {
+  shot: /^\d+$/.test(Astro.url.searchParams.get('shot') ?? '') ? Number(Astro.url.searchParams.get('shot')) : null,
+  style: bundle.styles.find((st) => st.slug === Astro.url.searchParams.get('style'))?.slug ?? null,
+};
+
 const initial = {
   slug,
   layouts: usable,
@@ -73,6 +85,10 @@ const initial = {
   initialName,
   kitHasDark,
   pickCount,
+  scope,
+  initialFormatId: designRow?.format_id ?? undefined,
+  initialTheme: designRow?.theme === 'dark' ? ('dark' as const) : ('light' as const),
+  initialEffect: designRow?.effect ?? '',
 };
 ---
 
