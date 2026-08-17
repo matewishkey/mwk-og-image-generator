@@ -118,7 +118,7 @@ export async function textLayer(opts: {
  * The design system is explicit that this is the sole logo and that a red square must
  * never be hand-built alongside it — so it is built once, here.
  */
-async function redBlock(b: BrandConfig): Promise<Buffer> {
+export async function redBlock(b: BrandConfig): Promise<Buffer> {
   const { size, markScale } = b.logo;
   const markSize = Math.round(size * markScale);
 
