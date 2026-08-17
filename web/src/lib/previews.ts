@@ -16,6 +16,7 @@
 import {
   LayoutConfigSchema,
   layoutPanels,
+  selectPanels,
   seamHeaders,
   type EngineRenderRequest,
   type LayoutConfig,
@@ -102,9 +103,7 @@ async function sha256(text: string): Promise<string> {
  */
 export async function ensurePreview(env: Env, o: EnsureOpts): Promise<PreviewRow> {
   const panels = await resolvePanelTakes(env, o.project.id, o.styleId);
-  const needed = layoutPanels(o.layoutConfig);
-  if (panels.length < needed)
-    throw new Error(`needs ${needed} image${needed === 1 ? '' : 's'}; the project has ${panels.length}`);
+  const sel = selectPanels(o.layoutConfig, panels);
 
   const kit = await env.DB.prepare(`SELECT config, mark_key FROM brand_kit WHERE id = ?1`)
     .bind(o.project.brand_kit_id)
@@ -127,7 +126,7 @@ export async function ensurePreview(env: Env, o: EnsureOpts): Promise<PreviewRow
       kicker: o.project.kicker ?? undefined,
       tagline: o.project.tagline ?? undefined,
     },
-    panels: panels.slice(0, needed).map((p) => ({
+    panels: sel.map((p) => ({
       key: p.art_key,
       label: p.label ?? `shot ${p.position}`,
     })),

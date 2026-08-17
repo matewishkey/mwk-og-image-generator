@@ -102,6 +102,12 @@ export const CellSchema = z.object({
   y: frac,
   w: z.number().min(0.02).max(1),
   h: z.number().min(0.02).max(1),
+  /** Which project shot feeds this cell: 0-based index into the shot order.
+   *  Default: the cell's own position. Lets one full-bleed cell show shot 5
+   *  without placeholder cells in front of it. Resolved WEB-side by
+   *  selectPanels — the engine receives panels already in cell order, so its
+   *  own (older) schema copy may safely strip this field. */
+  panel: z.number().int().min(0).max(30).optional(),
   feather: z.array(z.enum(['left', 'right', 'top', 'bottom'])).optional(),
   fit: z.enum(['cover', 'contain']).default('cover'),
   crop: z.enum(['attention', 'entropy', 'centre']).optional(),
@@ -214,6 +220,32 @@ export const ARCHETYPE_PANELS: Record<NonNullable<LayoutConfig['archetype']>, nu
   quad: 4,
   filmstrip: 4,
 };
+
+/**
+ * The panels a config actually consumes, in cell order, honouring per-cell
+ * `panel` indexes into the project's shot-order inventory. Archetype configs
+ * take the first N. Throws with the offending cell when an index is out of
+ * range — the caller's inventory is simply too short.
+ */
+export function selectPanels<T>(cfg: LayoutConfig, inventory: T[]): T[] {
+  if (!cfg.cells?.length) {
+    const needed = layoutPanels(cfg);
+    if (inventory.length < needed) {
+      throw new Error(`This layout needs ${needed} picks; the project has ${inventory.length}.`);
+    }
+    return inventory.slice(0, needed);
+  }
+  return cfg.cells.map((c, i) => {
+    const idx = c.panel ?? i;
+    const p = inventory[idx];
+    if (p === undefined) {
+      throw new Error(
+        `Cell ${i + 1} draws from shot ${idx + 1}, but the project only has ${inventory.length} shots with usable takes.`,
+      );
+    }
+    return p;
+  });
+}
 
 /** How many panels a config consumes — cells win over the archetype table. */
 export function layoutPanels(cfg: LayoutConfig): number {

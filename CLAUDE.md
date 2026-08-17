@@ -117,6 +117,18 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   byte-identical; don't "clean it up". Hand-authoring: POST `/api/projects/<slug>/designs`
   or `studio design <slug> --config <file.json>` (the design page's author card died in
   the round-5 preview-first rebuild; the editor covers interactive authoring).
+- **Cells target shots explicitly**: `CellSchema.panel` (0-based index into the
+  project's shot order, default = the cell's own index) is resolved WEB-side by
+  `selectPanels` in src/seam.ts — design.ts (both creators) and previews.ts all route
+  through it; the engine receives panels already in cell order and its baked schema
+  copy strips the field. Never reintroduce `panels.slice(0, needed)` — positional
+  slicing is why banner configs once needed 7 placeholder feeder cells to reach shot 8.
+- **Re-rendering the same layout+format+theme+effect SUPERSEDES the old design row**
+  (createDesign/createCollection close each insert batch with the UPDATE). The design
+  page also hides designs whose LAYOUT is archived (`?versions=all` shows them) — so
+  "clean up the design page" = archive dead layouts, never delete rows. NOTE
+  `studio design --config` creates a NEW layout row per call, which defeats the
+  supersede match — iterate via `{layoutId}` API renders once a template exists.
 - **Kits can carry uploaded faces**: `FontSpec.fileKey` (R2) + `family` parsed from the
   file's own name table (web/src/lib/fonts.ts); the engine materialises it via
   `localFont()` and rewrites `file` before rendering. Never hand-type a pango family —

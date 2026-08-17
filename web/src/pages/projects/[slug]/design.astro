@@ -156,15 +156,19 @@ if (Astro.request.method === 'POST') {
   }
 }
 
+// Archiving a layout retires its designs from this page too — they stay in the
+// database (nothing that ran ever disappears) and come back with ?versions=all.
+const showAllVersions = Astro.url.searchParams.get('versions') === 'all';
 const designs = await env.DB.prepare(
   `SELECT d.id, d.collection_id, d.title, d.tagline, d.kicker, d.r2_key, d.thumb_key, d.width, d.height, d.created_at,
           d.effect, d.theme, l.name AS layout_name, l.team_id AS layout_team_id, l.id AS layout_id,
           f.name AS format_name, f.slug AS format_slug
      FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
     WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
+      AND (l.archived_at IS NULL OR ?2)
     ORDER BY d.created_at DESC`,
 )
-  .bind(project.id)
+  .bind(project.id, showAllVersions ? 1 : 0)
   .all<{
     id: string; collection_id: string | null; title: string | null; tagline: string | null;
     kicker: string | null; r2_key: string; thumb_key: string; width: number; height: number;
@@ -415,7 +419,14 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
         {
           versions.length > 0 && (
             <section class="versions">
-              <p class="kicker"><span class="g">/</span>Versions — click one to lead</p>
+              <p class="kicker">
+                <span class="g">/</span>Versions — click one to lead
+                {showAllVersions ? (
+                  <a href="?">hide retired</a>
+                ) : (
+                  <a href="?versions=all">show retired too</a>
+                )}
+              </p>
               <div class="designs-grid">
                 {versions.map((d) => (
                   <figure class="design-card">

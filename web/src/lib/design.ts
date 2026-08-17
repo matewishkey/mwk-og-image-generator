@@ -4,7 +4,7 @@
  */
 
 import {
-  layoutPanels,
+  selectPanels,
   LayoutConfigSchema,
   seamHeaders,
   type EngineRenderRequest,
@@ -47,10 +47,7 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
   if (!layout || !format || !kit) throw new Error('layout, format or brand kit missing');
 
   const cfg = LayoutConfigSchema.parse(JSON.parse(layout.config));
-  const needed = layoutPanels(cfg);
-  if (o.panels.length < needed) {
-    throw new Error(`This layout needs ${needed} picks; the project has ${o.panels.length}.`);
-  }
+  const sel = selectPanels(cfg, o.panels);
 
   const designId = ulid();
   const outKey = `teams/${o.teamId}/designs/${designId}.png`;
@@ -68,7 +65,7 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
     effect: o.effect,
     theme: o.theme,
     text: { title: o.title, kicker: o.kicker, tagline: o.tagline },
-    panels: o.panels.slice(0, needed).map((p) => ({ key: p.artKey, label: p.label })),
+    panels: sel.map((p) => ({ key: p.artKey, label: p.label })),
   };
 
   if (!env.ENGINE) throw new Error('ENGINE binding is not configured');
@@ -106,12 +103,20 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
       o.effect ?? null,
       o.theme ?? 'light',
     ),
-    ...o.panels.slice(0, needed).map((p, i) =>
+    ...sel.map((p, i) =>
       env.DB.prepare(
         `INSERT INTO design_panel (design_id, position, source_kind, take_id, label)
          VALUES (?1, ?2, 'take', ?3, ?4)`,
       ).bind(designId, i + 1, p.takeId, p.label ?? null),
     ),
+    // A re-render of the same template+format+look supersedes its predecessors:
+    // they leave the page but stay in the database, like every superseded take.
+    env.DB.prepare(
+      `UPDATE design SET superseded_by_id = ?1
+        WHERE project_id = ?2 AND layout_id = ?3 AND format_id = ?4
+          AND theme = ?5 AND coalesce(effect,'') = ?6
+          AND id != ?1 AND superseded_by_id IS NULL`,
+    ).bind(designId, o.projectId, o.layoutId, o.formatId, o.theme ?? 'light', o.effect ?? ''),
   ];
   await env.DB.batch(stmts);
   return designId;
@@ -140,10 +145,7 @@ export async function createCollection(
   ]);
   if (!layout || !kit) throw new Error('layout or brand kit missing');
   const cfg = LayoutConfigSchema.parse(JSON.parse(layout.config));
-  const needed = layoutPanels(cfg);
-  if (o.panels.length < needed) {
-    throw new Error(`This layout needs ${needed} picks; the project has ${o.panels.length}.`);
-  }
+  const sel = selectPanels(cfg, o.panels);
 
   const plan = o.formats.map((f) => {
     const designId = ulid();
@@ -172,7 +174,7 @@ export async function createCollection(
     effect: o.effect,
     theme: o.theme,
     text: { title: o.title, kicker: o.kicker, tagline: o.tagline },
-    panels: o.panels.slice(0, needed).map((p) => ({ key: p.artKey, label: p.label })),
+    panels: sel.map((p) => ({ key: p.artKey, label: p.label })),
   };
   if (!env.ENGINE) throw new Error('ENGINE binding is not configured');
   const body = JSON.stringify(payload);
@@ -202,12 +204,18 @@ export async function createCollection(
         item.out.outKey, item.out.thumbKey, item.format.width, item.format.height,
         o.userId, nowIso, o.effect ?? null, o.theme ?? 'light',
       ),
-      ...o.panels.slice(0, needed).map((pnl, i) =>
+      ...sel.map((pnl, i) =>
         env.DB.prepare(
           `INSERT INTO design_panel (design_id, position, source_kind, take_id, label)
            VALUES (?1, ?2, 'take', ?3, ?4)`,
         ).bind(item.designId, i + 1, pnl.takeId, pnl.label ?? null),
       ),
+      env.DB.prepare(
+        `UPDATE design SET superseded_by_id = ?1
+          WHERE project_id = ?2 AND layout_id = ?3 AND format_id = ?4
+            AND theme = ?5 AND coalesce(effect,'') = ?6
+            AND id != ?1 AND superseded_by_id IS NULL`,
+      ).bind(item.designId, o.projectId, o.layoutId, item.format.id, o.theme ?? 'light', o.effect ?? ''),
     );
   }
   if (stmts.length) await env.DB.batch(stmts);
