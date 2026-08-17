@@ -18,9 +18,10 @@ lighting, the whole grid collapses into one-off images and the tool stops being 
 AI pass because a model cannot reproduce a logo or reliably render text. Two consequences
 that look unrelated but are not:
 
-- `FRAME_RULES` in `src/prompt.ts` tells every model to render no text and to keep the
-  bottom fifth calm. That instruction exists *because* the band lands there. Change the
-  band height in `brand/brand.json` and that sentence needs to change with it.
+- The frame rules in `src/prompt.ts` (`FRAME_BASE` + `NO_TEXT`/`SOME_TEXT`) tell every
+  model to render no text and to keep the bottom fifth calm. That instruction exists
+  *because* the band lands there. Change the band height in `brand/brand.json` and that
+  sentence needs to change with it.
 - `applyBrand()` crops with `position: sharp.strategy.attention`, not centre, so a face
   survives the 16:9 → 1.905:1 squeeze.
 
@@ -113,8 +114,9 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   kit resolves them. Use `layoutPanels(cfg)`, never index ARCHETYPE_PANELS directly
   (archetype is optional now). The preset pixel maths in `placeRects` is FROZEN — the
   freeform refactor shipped only after a 112-case harness proved every real layout
-  byte-identical; don't "clean it up". Hand-authoring: the design page author card,
-  POST `/api/projects/<slug>/designs`, or `studio design <slug> --config <file.json>`.
+  byte-identical; don't "clean it up". Hand-authoring: POST `/api/projects/<slug>/designs`
+  or `studio design <slug> --config <file.json>` (the design page's author card died in
+  the round-5 preview-first rebuild; the editor covers interactive authoring).
 - **Kits can carry uploaded faces**: `FontSpec.fileKey` (R2) + `family` parsed from the
   file's own name table (web/src/lib/fonts.ts); the engine materialises it via
   `localFont()` and rewrites `file` before rendering. Never hand-type a pango family —
@@ -144,9 +146,11 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
 - **Generate-first, never config-first.** Twenty rendered options beat one form.
   Fine-tune panels exist for the tenth time, not the first.
 - **Design tab shape**: one leading image with its actions, all versions in a grid
-  under it, click a version to lead. Rendering defaults to the OG card only, with a
-  format checkbox list for more ("every format" is one click, not the default —
-  mate revised his earlier all-formats-default rule on 2026-08-16).
+  under it, click a version to lead. Rendering defaults to the OG card only; "every
+  format" is the one-click all-formats action on the lead, never the default (mate
+  revised his earlier all-formats-default rule on 2026-08-16; round 5 removed the
+  format checkbox list from the page entirely — full format control lives in the
+  editor and the designs API).
 - Every screen keeps a pasteable URL; filters live in the query string.
 - **Nothing is ever lost, and save state is VISIBLE** (round 3, after mate lost an edit to
   a button click): the workspace autosaves every edit (debounced), every action flushes
@@ -189,7 +193,7 @@ Load-bearing details:
   `HoldButton` with the same timings/classes as the global `data-confirm` script.
 - The icon set lives in `components/icons.ts` — ONE source imported by Icon.astro and
   the island. Add an icon there → add its /glossary row.
-- `/projects/<slug>/takes` 301s to the merged page; the old takes.json poll route is gone.
+- `/projects/<slug>/takes` 301s to the `/shots` overview; the old takes.json poll route is gone.
 - **Playwright gotcha**: `client:load` islands are server-rendered THEN hydrated — a test
   that clicks before hydration hits dead buttons. Wait for
   `astro-island:not([ssr])` before interacting (cost a full verify-run to find).
@@ -309,8 +313,9 @@ lib/runs.ts) — change behaviour there, not in the routes.
   and content-addressed; there is no R2 backup beyond that.
 - **Style proofs** are real takes in the hidden per-team `_style-proofs` project (archived on
   purpose) — that is why they appear in History and the charge ledger with zero extra machinery.
-- **House styles**: 27 as of round 3 (9 original + 18 from the 2026-08-16 research sweep of
-  common OG-imagery looks). Source of truth is `styles/*.yaml`; NEW styles added after 0002
+- **House styles**: 46 as of round 4 (9 original + 18 round-3 + 19 round-4 from research
+  sweeps of common OG-imagery looks, all proofed — count them in D1, not here, when it
+  matters). Source of truth is `styles/*.yaml`; NEW styles added after 0002
   ship via `node web/scripts/gen-style-migration.mjs <NNNN_name.sql>`, which diffs the yaml
   against every existing migration's `seed_style_*` ids.
 - **Co-write is an EXPANDER** (round 3): `suggestShotVariants` turns a short idea into
