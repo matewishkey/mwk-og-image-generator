@@ -24,14 +24,18 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
 
   const env = ENV;
   const now = new Date();
-  // /api/* speaks JSON both ways: bearer tokens are honoured there (and only
-  // there), and auth failures answer 401/403 JSON instead of redirecting.
+  // /api/* speaks JSON both ways: bearer tokens are honoured there, and auth
+  // failures answer 401/403 JSON instead of redirecting. GET /img/* also
+  // honours bearer (round 7): the studio CLI downloads rendered cards, and a
+  // token that can mint designs can obviously read them — no new privilege.
   const isApi = ctx.url.pathname.startsWith('/api/');
+  const bearerOk =
+    isApi || (ctx.url.pathname.startsWith('/img/') && ctx.request.method === 'GET');
 
   const auth = ctx.request.headers.get('authorization');
   const cookie = ctx.cookies.get('mwk_session')?.value;
 
-  if (isApi && auth?.startsWith('Bearer ')) {
+  if (bearerOk && auth?.startsWith('Bearer ')) {
     const hash = await sha256Hex(auth.slice(7).trim());
     const row = await env.DB.prepare(
       `SELECT k.id AS token_id, k.last_used_at, u.id AS user_id, u.email, u.name

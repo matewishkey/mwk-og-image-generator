@@ -10,7 +10,7 @@
  */
 
 import { parseArgs } from 'node:util';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 const USAGE = `mwk-og studio — drive the live studio; results appear in the browser
 
@@ -42,6 +42,9 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
   unhide <slug> <takeId>
   design <slug> --config <file.json>   render a hand-authored template (cells/texts/shapes,
                                colors as brand tokens); --name, --format <formatId>, --title/--kicker/--tagline
+  quick --image <file> --template <id|slug>   image in, branded card out — no project, no shots.
+                               --title/--kicker/--tagline, --theme dark, --formats og,story,…
+                               (default og), --out <dir> downloads the PNGs
 
 env: MWK_STUDIO_TOKEN (required), MWK_STUDIO_URL (default https://og.matewishkey.com)`;
 
@@ -514,6 +517,51 @@ export async function runStudio(argv: string[]): Promise<void> {
       );
       console.log(`✓ rendered design ${r.designId}`);
       console.log(studioUrl(r.url));
+      break;
+    }
+    case 'quick': {
+      const { values } = parseArgs({
+        args: rest,
+        options: {
+          image: { type: 'string' },
+          template: { type: 'string' },
+          title: { type: 'string' },
+          kicker: { type: 'string' },
+          tagline: { type: 'string' },
+          theme: { type: 'string' },
+          formats: { type: 'string' },
+          out: { type: 'string' },
+        },
+      });
+      if (!values.image || !values.template)
+        fail('usage: mwk-og studio quick --image <file> --template <id|slug> [--title …] [--formats og,story] [--out <dir>]');
+      const bytes = await readFile(values.image);
+      const result = await api<{ designs: { id: string; url: string; format: string }[] }>('/quick-card', {
+        method: 'POST',
+        body: {
+          image: bytes.toString('base64'),
+          template: values.template,
+          title: values.title,
+          kicker: values.kicker,
+          tagline: values.tagline,
+          theme: values.theme === 'dark' ? 'dark' : undefined,
+          formatIds: values.formats ? multi([values.formats]) : undefined,
+        },
+      });
+      for (const d of result.designs) console.log(`✓ ${d.format}  ${studioUrl(d.url)}`);
+      if (values.out) {
+        await mkdir(values.out, { recursive: true });
+        for (const d of result.designs) {
+          const res = await fetch(studioUrl(d.url), {
+            headers: { authorization: `Bearer ${process.env.MWK_STUDIO_TOKEN}` },
+          });
+          if (!res.ok) fail(`download failed for ${d.format}: ${res.status}`);
+          const file = `${values.out}/quick-${d.format}.png`;
+          await writeFile(file, Buffer.from(await res.arrayBuffer()));
+          console.log(`  saved ${file}`);
+        }
+      }
+      console.log(studioUrl('/quick'));
       break;
     }
     case undefined:

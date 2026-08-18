@@ -298,6 +298,16 @@ SHOWS real cards instead of asking for settings; the knobs live only in the edit
   would misread `cell.panel` refs as inventory indexes). `preselected` rides ONLY
   replay paths, never resolve paths. renderAllFormats replays too — a promoted design
   keeps its exact pictures, never re-resolved from current picks.
+- **Quick card (round 7 phase 1b)**: upload -> branded card, no shots/runs/styles.
+  `lib/quick.ts` `quickCard()` stores the image via uploadReferences (content-deduped),
+  fills EVERY slot of the template with it (design_panel `source_kind='reference'` —
+  the branch 0003 designed for), renders into the hidden per-team `_quick` project
+  (the _style-proofs pattern). Surfaces: `/quick` page, `POST /api/quick-card`
+  (bearer; `{image: base64|referenceId, template, title?, …}` — the mwk-social hook),
+  `studio quick --image <f> --template <slug> [--out <dir>]`. Bearer tokens are also
+  honoured on GET `/img/*` (middleware) so the CLI can download what it minted; the
+  zip route looks projects up directly (not loadProject) so archived hidden projects
+  still zip.
 - **`updateProject` in lib/projects.ts is the ONE settings writer** — settings page,
   PATCH /api/projects/[slug], and `studio set` all call it. The brand-kit selector
   (settings + design page, changes project.brand_kit_id) rides it; kit change → new

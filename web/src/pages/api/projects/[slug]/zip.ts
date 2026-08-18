@@ -9,14 +9,19 @@ import type { APIRoute } from 'astro';
 import { zipSync } from 'fflate';
 import { ENV } from '../../../../lib/runtime';
 import { err } from '../../../../lib/api';
-import { loadProject } from '../../../../lib/data';
 
 export const GET: APIRoute = async (ctx) => {
   const team = ctx.locals.team;
   if (!team || !ctx.locals.user) return err(403, 'no team');
-  const bundle = await loadProject(ENV, team.id, ctx.params.slug!);
-  if (!bundle) return err(404, 'no such project');
-  const slug = bundle.project.slug;
+  // Direct lookup, NOT loadProject: archived projects (the hidden _quick and
+  // _style-proofs) must still zip — this is a read-only team-scoped export.
+  const project = await ENV.DB.prepare(
+    `SELECT id, slug FROM project WHERE team_id = ?1 AND slug = ?2`,
+  )
+    .bind(team.id, ctx.params.slug!)
+    .first<{ id: string; slug: string }>();
+  if (!project) return err(404, 'no such project');
+  const slug = project.slug;
 
   const collectionId = ctx.url.searchParams.get('collection');
   const designId = ctx.url.searchParams.get('design');
@@ -28,7 +33,7 @@ export const GET: APIRoute = async (ctx) => {
         AND ((?3 IS NOT NULL AND d.collection_id = ?3) OR (?4 IS NOT NULL AND d.id = ?4))
       ORDER BY d.created_at`,
   )
-    .bind(bundle.project.id, team.id, collectionId, designId)
+    .bind(project.id, team.id, collectionId, designId)
     .all<{ r2_key: string; theme: string; format_slug: string }>();
   if (!rows.results.length) return err(404, 'nothing to zip');
 

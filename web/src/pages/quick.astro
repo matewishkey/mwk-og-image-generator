@@ -1,0 +1,203 @@
+---
+/**
+ * QUICK CARD (round 7, phase 1b): upload an image -> branded card from a
+ * template. No project, no shots, no runs — the fastest path from a picture
+ * to something postable. Renders land in the hidden '_quick' project, so
+ * history/storage semantics hold; the page lists the recent ones below.
+ * URL is pasteable: ?template=<id|slug>&theme=dark
+ */
+import Base from '../layouts/Base.astro';
+import Icon from '../components/Icon.astro';
+import { ENV } from '../lib/runtime';
+import { LayoutConfigSchema, layoutPanels } from '../../../src/seam.ts';
+import { quickCard, QUICK_SLUG } from '../lib/quick';
+
+const env = ENV;
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
+
+const q = Astro.url.searchParams;
+const scopeTheme = q.get('theme') === 'dark' ? ('dark' as const) : ('light' as const);
+
+const layouts = await env.DB.prepare(
+  `SELECT l.id, l.slug, l.name, l.config, t.kind AS team_kind FROM layout l JOIN team t ON t.id = l.team_id
+    WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL
+      AND (t.kind = 'house' OR l.slug NOT LIKE 'gen-%')
+    ORDER BY t.kind = 'house', l.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; slug: string; name: string; config: string; team_kind: string }>();
+const templates = layouts.results.flatMap((l) => {
+  const parsed = LayoutConfigSchema.safeParse(JSON.parse(l.config));
+  if (!parsed.success) return [];
+  return [{ id: l.id, name: l.name, house: l.team_kind === 'house', needs: layoutPanels(parsed.data) }];
+});
+const currentTemplate =
+  templates.find((t) => t.id === q.get('template')) ?? templates[0];
+
+let error = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  try {
+    const file = form.get('image');
+    const { designs } = await quickCard(env, team.id, user.id, {
+      files: file instanceof File && file.size > 0 ? [file] : undefined,
+      template: String(form.get('template') ?? ''),
+      title: String(form.get('title') ?? ''),
+      kicker: String(form.get('kicker') ?? ''),
+      tagline: String(form.get('tagline') ?? ''),
+      theme: scopeTheme === 'dark' ? 'dark' : undefined,
+      formatIds: form.get('all-formats') ? undefined : ['og'],
+      ...(form.get('all-formats')
+        ? {
+            formatIds: (
+              await env.DB.prepare(`SELECT slug FROM format ORDER BY rowid`).all<{ slug: string }>()
+            ).results.map((f) => f.slug),
+          }
+        : {}),
+    });
+    const p = new URLSearchParams(q);
+    p.set('template', String(form.get('template') ?? ''));
+    p.set('done', String(designs.length));
+    return Astro.redirect(`/quick?${p.toString()}`);
+  } catch (e) {
+    error = (e as Error).message;
+  }
+}
+const doneNote = q.get('done');
+
+// Recent quick cards, grouped like Results does.
+interface Row {
+  id: string; collection_id: string | null; r2_key: string; thumb_key: string;
+  created_at: string; theme: string; layout_name: string; format_slug: string;
+}
+const recent = await env.DB.prepare(
+  `SELECT d.id, d.collection_id, d.r2_key, d.thumb_key, d.created_at, d.theme,
+          l.name AS layout_name, f.slug AS format_slug
+     FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
+     JOIN project p ON p.id = d.project_id
+    WHERE p.team_id = ?1 AND p.slug = ?2 AND d.superseded_by_id IS NULL
+    ORDER BY d.created_at DESC LIMIT 36`,
+)
+  .bind(team.id, QUICK_SLUG)
+  .all<Row>();
+const groups: { key: string; rows: Row[] }[] = [];
+{
+  const seen = new Set<string>();
+  for (const d of recent.results) {
+    const key = d.collection_id ?? `solo-${d.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    groups.push({ key, rows: d.collection_id ? recent.results.filter((v) => v.collection_id === d.collection_id) : [d] });
+  }
+}
+const quickProjSlug = QUICK_SLUG;
+---
+
+<Base title="Quick card" nav="quick">
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>Quick card</p>
+    <h1>Image in, card out</h1>
+    <p class="sub">
+      Drop a picture, pick a template, Render — no project, no shots. The upload fills every
+      slot of the template. Also an API: <span class="mono">POST /api/quick-card</span> with a bearer token.
+    </p>
+  </div>
+
+  {error && <p class="flash">{error}</p>}
+  {doneNote && <p class="flash">{doneNote} card{doneNote === '1' ? '' : 's'} rendered — they're in the list below, $0.00.</p>}
+
+  <form method="post" enctype="multipart/form-data" class="card qform">
+    <div class="qgrid">
+      <label class="qdrop">
+        <input type="file" name="image" accept="image/*" data-jpeg required />
+        <Icon name="upload" /><span>Choose or drop an image<br /><i class="mono faint">PNG, JPEG or WebP — converted to JPEG in the browser</i></span>
+      </label>
+      <div class="qfields">
+        <label class="field"><span>Template</span>
+          <select name="template">
+            {templates.map((t) => (
+              <option value={t.id} selected={t.id === currentTemplate?.id}>
+                {t.house ? '' : '★ '}{t.name} · {t.needs} slot{t.needs === 1 ? '' : 's'}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label class="field"><span>Title</span>
+          <input type="text" name="title" placeholder="Mate *Wish* Key" /></label>
+        <label class="field"><span>Kicker (label above)</span>
+          <input type="text" name="kicker" /></label>
+        <label class="field"><span>Tagline (line below)</span>
+          <input type="text" name="tagline" /></label>
+        <div class="qrow">
+          <span class="theme-chips">
+            <a class:list={['chip', { on: scopeTheme === 'light' }]} href={`/quick${currentTemplate ? `?template=${currentTemplate.id}` : ''}`}>light</a>
+            <a class:list={['chip', { on: scopeTheme === 'dark' }]} href={`/quick?${currentTemplate ? `template=${currentTemplate.id}&` : ''}theme=dark`}>dark</a>
+          </span>
+          <label class="qcheck"><input type="checkbox" name="all-formats" value="1" /> every format (12), not just the OG card</label>
+        </div>
+        <button class="btn" type="submit" data-running="Rendering…"><Icon name="run" />Render · $0.00</button>
+      </div>
+    </div>
+  </form>
+
+  {groups.length > 0 && (
+    <section class="qrecent">
+      <p class="kicker"><span class="g">/</span>Recent quick cards</p>
+      <div class="qgroups">
+        {groups.map((g) => {
+          const leadRow = g.rows.find((r) => r.format_slug === 'og') ?? g.rows[0]!;
+          return (
+            <figure class="qcard">
+              <a href={`/img/${leadRow.r2_key}`} target="_blank">
+                <img src={`/img/${leadRow.thumb_key}`} alt={leadRow.layout_name} loading="lazy" />
+              </a>
+              <figcaption>
+                <span class="mono faint">{leadRow.layout_name}{leadRow.theme === 'dark' ? ' · dark' : ''}{g.rows.length > 1 ? ` · ${g.rows.length} formats` : ''}</span>
+                {g.rows.length > 1 && leadRow.collection_id ? (
+                  <a class="btn small" href={`/api/projects/${quickProjSlug}/zip?collection=${leadRow.collection_id}`}><Icon name="download" />zip</a>
+                ) : (
+                  <a class="btn small ghost" href={`/img/${leadRow.r2_key}`} download={`quick-${leadRow.format_slug}.png`}><Icon name="download" />PNG</a>
+                )}
+              </figcaption>
+            </figure>
+          );
+        })}
+      </div>
+    </section>
+  )}
+</Base>
+
+<style>
+  .qform { margin-bottom: 2rem; padding: 1rem 1.2rem; }
+  .qgrid { display: grid; grid-template-columns: minmax(14rem, 1fr) minmax(18rem, 1.4fr); gap: 1.2rem; }
+  @media (max-width: 46rem) { .qgrid { grid-template-columns: 1fr; } }
+  .qdrop {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6rem;
+    border: 2px dashed var(--line); border-radius: var(--radius); padding: 1.4rem; text-align: center;
+    cursor: pointer; min-height: 12rem;
+  }
+  .qdrop:hover { border-color: var(--red); }
+  .qdrop input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .qdrop i { font-size: 0.72rem; }
+  .qfields { display: flex; flex-direction: column; gap: 0.1rem; }
+  .qrow { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0.4rem 0 0.7rem; }
+  .qcheck { display: inline-flex; gap: 0.4rem; align-items: center; font-size: 0.82rem; }
+  .theme-chips { display: inline-flex; gap: 0.3rem; }
+  .chip {
+    display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px;
+    padding: 0.18rem 0.65rem; font-size: 0.8rem; color: var(--mute); text-decoration: none; background: var(--surface);
+  }
+  .chip.on { border-color: var(--red); color: var(--ink); background: var(--surface-2); }
+  .qfields .btn { align-self: flex-start; }
+
+  .qrecent .kicker { margin-bottom: 0.8rem; }
+  .qgroups { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.9rem; }
+  .qgroups > * { min-width: 0; }
+  .qcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 0; }
+  .qcard img { display: block; width: 100%; height: auto; background: var(--surface-2); }
+  .qcard figcaption { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.7rem; font-size: 0.78rem; flex-wrap: wrap; }
+  .qcard .btn { margin-left: auto; }
+  .faint { color: var(--faint); }
+</style>
