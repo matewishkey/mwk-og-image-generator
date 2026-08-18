@@ -8,7 +8,6 @@ import type { APIRoute } from 'astro';
 import { seamVerify, type EngineEvent } from '../../../../src/seam.ts';
 import { ENV } from '../../lib/runtime';
 import { ulid } from '../../lib/ulid';
-import { refreshStylePreviews } from '../../lib/previews';
 
 function classifyError(msg: string): string {
   if (/^upload:/.test(msg)) return 'render';
@@ -147,24 +146,8 @@ export const POST: APIRoute = async (ctx) => {
       .bind(status, nowIso, event.runId)
       .run();
 
-    // Fresh takes → refresh the per-style OG previews so they are waiting on
-    // the design page when the user arrives. This is the run's LAST callback,
-    // so a few engine round-trips here delay nothing; failures are swallowed
-    // (a broken preview must never fail the run's bookkeeping).
-    if (status === 'done') {
-      try {
-        const proj = await env.DB.prepare(
-          `SELECT p.id, p.team_id, p.brand_kit_id, p.title, p.kicker, p.tagline
-             FROM run r JOIN project p ON p.id = r.project_id WHERE r.id = ?1`,
-        )
-          .bind(event.runId)
-          .first<{ id: string; team_id: string; brand_kit_id: string;
-                   title: string | null; kicker: string | null; tagline: string | null }>();
-        if (proj) await refreshStylePreviews(env, proj.team_id, proj);
-      } catch {
-        /* preview refresh is best-effort */
-      }
-    }
+    // No auto-render here: previews render on intent (round 7). A finished run
+    // only does its bookkeeping.
     return Response.json({ ok: true });
   }
 

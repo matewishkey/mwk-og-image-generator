@@ -91,25 +91,39 @@ check('first take image actually decoded', firstImgOk);
 check('captions show a cost', (await page.locator('.take .money').count()) > 0);
 check('re-roll buttons present', (await page.locator('button', { hasText: 'Re-roll' }).count()) > 0);
 
-// design gallery: cards render, thumbs decode, download link answers
+// design page (round 7): template picker renders, NOTHING auto-renders
+let previewPosts = 0;
+page.on('request', (r) => {
+  if (r.method() === 'POST' && /\/api\/projects\/[^/]+\/previews/.test(r.url())) previewPosts++;
+});
 await page.goto(`${BASE}/projects/brick-launch/design`);
-const designCards = await page.locator('.design-card').count();
-check(`design gallery renders (${designCards})`, designCards >= 1);
-// The versions grid sits below the preview gallery now; its thumbs are
-// loading="lazy", so scroll one into view before asking if it decoded.
-await page.locator('.design-card img').first().scrollIntoViewIfNeeded();
-const thumbOk = await page
+const tplCards = await page.locator('.tpl-card').count();
+check(`template picker renders (${tplCards})`, tplCards >= 1);
+await page.waitForTimeout(1500);
+check(`no preview POSTs on design-page load (${previewPosts})`, previewPosts === 0);
+
+// results page: groups render (brick-launch has past renders)
+await page.goto(`${BASE}/projects/brick-launch/results`);
+check('results heading renders', (await page.locator('h1').textContent()) === 'Results');
+const rGroups = await page.locator('.rgroup').count();
+check(`results groups render (${rGroups})`, rGroups >= 1);
+const rThumbOk = await page
   .waitForFunction(
-    () => { const i = document.querySelector('.design-card img'); return i && i.complete && i.naturalWidth > 0; },
+    () => { const i = document.querySelector('.rgroup img'); return i && i.complete && i.naturalWidth > 0; },
     undefined,
     { timeout: 20_000 },
   )
   .then(() => true)
   .catch(() => false);
-check('first design thumb decoded', thumbOk);
+check('first result thumb decoded', rThumbOk);
 
 if (SHOTS) {
+  await page.goto(`${BASE}/projects/brick-launch/design`);
+  await page.waitForTimeout(1000);
   await page.screenshot({ path: `${SHOTS}/smoke-design.png`, fullPage: true });
+  await page.goto(`${BASE}/projects/brick-launch/results`);
+  await page.waitForTimeout(1000);
+  await page.screenshot({ path: `${SHOTS}/smoke-results.png`, fullPage: true });
   await page.goto(`${BASE}/projects/brick-launch/shots/1`);
   await page.waitForTimeout(3000);
   await page.screenshot({ path: `${SHOTS}/smoke-contact-sheet.png`, fullPage: true });

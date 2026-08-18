@@ -13,6 +13,15 @@ import {
 } from '../../../src/seam.ts';
 import { ulid } from './ulid';
 
+/** One slot's picture: a take OR an uploaded reference (exactly one id set —
+ *  the design_panel CHECK enforces it). artKey is the raw image's R2 key. */
+export interface PanelInput {
+  artKey: string;
+  label?: string;
+  takeId?: string;
+  referenceId?: string;
+}
+
 export interface DesignInputs {
   teamId: string;
   userId: string;
@@ -30,7 +39,23 @@ export interface DesignInputs {
   /** 'dark' renders with the kit's colorsDark overlaid; default 'light'. */
   theme?: 'light' | 'dark';
   /** Panels in order (null = hidden/unusable slot, kept for index stability). */
-  panels: ({ takeId: string; artKey: string; label?: string } | null)[];
+  panels: (PanelInput | null)[];
+  /**
+   * REPLAY mode: `panels` is already the post-selectPanels flattened list
+   * (one entry per cell, in cell order — exactly what design_panel stores),
+   * so selectPanels must NOT run again: re-selecting would misread `cell.panel`
+   * refs as inventory indexes. Only replay paths (rerenderDesign and friends)
+   * may set this; resolve paths never do.
+   */
+  preselected?: boolean;
+}
+
+/** Fingerprint of the slot assignments, part of the supersede identity:
+ *  same template+format+theme+words+PICTURES supersedes, anything else coexists. */
+export async function panelsHash(sel: PanelInput[]): Promise<string> {
+  const text = sel.map((p, i) => `${i}:${p.takeId ?? `ref-${p.referenceId}`}`).join('|');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
@@ -47,7 +72,10 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
   if (!layout || !format || !kit) throw new Error('layout, format or brand kit missing');
 
   const cfg = LayoutConfigSchema.parse(JSON.parse(layout.config));
-  const sel = selectPanels(cfg, o.panels);
+  const sel = o.preselected
+    ? o.panels.filter((p): p is PanelInput => p != null)
+    : selectPanels(cfg, o.panels);
+  const pHash = await panelsHash(sel);
 
   const designId = ulid();
   const outKey = `teams/${o.teamId}/designs/${designId}.png`;
@@ -81,8 +109,8 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
   const stmts = [
     env.DB.prepare(
       `INSERT INTO design (id, team_id, project_id, collection_id, layout_id, brand_kit_id, format_id,
-         title, kicker, tagline, r2_key, thumb_key, width, height, created_by, created_at, effect, theme)
-       VALUES (?1, ?2, ?3, ?16, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?17, ?18)`,
+         title, kicker, tagline, r2_key, thumb_key, width, height, created_by, created_at, effect, theme, panels_hash)
+       VALUES (?1, ?2, ?3, ?16, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?17, ?18, ?19)`,
     ).bind(
       designId,
       o.teamId,
@@ -102,21 +130,26 @@ export async function createDesign(env: Env, o: DesignInputs): Promise<string> {
       o.collectionId ?? null,
       o.effect ?? null,
       o.theme ?? 'light',
+      pHash,
     ),
     ...sel.map((p, i) =>
       env.DB.prepare(
-        `INSERT INTO design_panel (design_id, position, source_kind, take_id, label)
-         VALUES (?1, ?2, 'take', ?3, ?4)`,
-      ).bind(designId, i + 1, p.takeId, p.label ?? null),
+        `INSERT INTO design_panel (design_id, position, source_kind, take_id, reference_id, label)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      ).bind(designId, i + 1, p.takeId ? 'take' : 'reference',
+             p.takeId ?? null, p.takeId ? null : p.referenceId ?? null, p.label ?? null),
     ),
-    // A re-render of the same template+format+look supersedes its predecessors:
-    // they leave the page but stay in the database, like every superseded take.
+    // An IDENTICAL re-render (same template, format, look, words AND pictures)
+    // supersedes its predecessors: they leave the page but stay in the database,
+    // like every superseded take. Any difference makes a coexisting revision.
     env.DB.prepare(
       `UPDATE design SET superseded_by_id = ?1
         WHERE project_id = ?2 AND layout_id = ?3 AND format_id = ?4
-          AND theme = ?5 AND coalesce(effect,'') = ?6
+          AND theme = ?5 AND coalesce(effect,'') = ?6 AND coalesce(panels_hash,'') = ?7
+          AND coalesce(title,'') = ?8 AND coalesce(kicker,'') = ?9 AND coalesce(tagline,'') = ?10
           AND id != ?1 AND superseded_by_id IS NULL`,
-    ).bind(designId, o.projectId, o.layoutId, o.formatId, o.theme ?? 'light', o.effect ?? ''),
+    ).bind(designId, o.projectId, o.layoutId, o.formatId, o.theme ?? 'light', o.effect ?? '',
+           pHash, o.title ?? '', o.kicker ?? '', o.tagline ?? ''),
   ];
   await env.DB.batch(stmts);
   return designId;
@@ -145,7 +178,10 @@ export async function createCollection(
   ]);
   if (!layout || !kit) throw new Error('layout or brand kit missing');
   const cfg = LayoutConfigSchema.parse(JSON.parse(layout.config));
-  const sel = selectPanels(cfg, o.panels);
+  const sel = o.preselected
+    ? o.panels.filter((p): p is PanelInput => p != null)
+    : selectPanels(cfg, o.panels);
+  const pHash = await panelsHash(sel);
 
   const plan = o.formats.map((f) => {
     const designId = ulid();
@@ -196,26 +232,29 @@ export async function createCollection(
     stmts.push(
       env.DB.prepare(
         `INSERT INTO design (id, team_id, project_id, collection_id, layout_id, brand_kit_id, format_id,
-           title, kicker, tagline, r2_key, thumb_key, width, height, created_by, created_at, effect, theme)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
+           title, kicker, tagline, r2_key, thumb_key, width, height, created_by, created_at, effect, theme, panels_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)`,
       ).bind(
         item.designId, o.teamId, o.projectId, o.collectionId, o.layoutId, o.brandKitId,
         item.format.id, o.title ?? null, o.kicker ?? null, o.tagline ?? null,
         item.out.outKey, item.out.thumbKey, item.format.width, item.format.height,
-        o.userId, nowIso, o.effect ?? null, o.theme ?? 'light',
+        o.userId, nowIso, o.effect ?? null, o.theme ?? 'light', pHash,
       ),
       ...sel.map((pnl, i) =>
         env.DB.prepare(
-          `INSERT INTO design_panel (design_id, position, source_kind, take_id, label)
-           VALUES (?1, ?2, 'take', ?3, ?4)`,
-        ).bind(item.designId, i + 1, pnl.takeId, pnl.label ?? null),
+          `INSERT INTO design_panel (design_id, position, source_kind, take_id, reference_id, label)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+        ).bind(item.designId, i + 1, pnl.takeId ? 'take' : 'reference',
+               pnl.takeId ?? null, pnl.takeId ? null : pnl.referenceId ?? null, pnl.label ?? null),
       ),
       env.DB.prepare(
         `UPDATE design SET superseded_by_id = ?1
           WHERE project_id = ?2 AND layout_id = ?3 AND format_id = ?4
-            AND theme = ?5 AND coalesce(effect,'') = ?6
+            AND theme = ?5 AND coalesce(effect,'') = ?6 AND coalesce(panels_hash,'') = ?7
+            AND coalesce(title,'') = ?8 AND coalesce(kicker,'') = ?9 AND coalesce(tagline,'') = ?10
             AND id != ?1 AND superseded_by_id IS NULL`,
-      ).bind(item.designId, o.projectId, o.layoutId, item.format.id, o.theme ?? 'light', o.effect ?? ''),
+      ).bind(item.designId, o.projectId, o.layoutId, item.format.id, o.theme ?? 'light', o.effect ?? '',
+             pHash, o.title ?? '', o.kicker ?? '', o.tagline ?? ''),
     );
   }
   if (stmts.length) await env.DB.batch(stmts);

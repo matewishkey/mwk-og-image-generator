@@ -26,7 +26,6 @@ export interface EditorProps {
   slug: string;
   layouts: { id: string; name: string; config: string }[];
   formats: { id: string; name: string; width: number; height: number }[];
-  effects: { slug: string; label: string }[];
   defaults: { title: string; kicker: string; tagline: string };
   initialConfig: Cfg;
   initialName: string;
@@ -40,7 +39,7 @@ export interface EditorProps {
 }
 
 export default function LayoutEditor(p: { initial: EditorProps }) {
-  const { slug, layouts, formats, effects, defaults, kitHasDark, pickCount, scope } = p.initial;
+  const { slug, layouts, formats, defaults, kitHasDark, pickCount, scope } = p.initial;
   const api = makeApi(slug);
 
   const [cfg, setCfg] = useState<Cfg>(p.initial.initialConfig);
@@ -49,7 +48,10 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
   const [title, setTitle] = useState(defaults.title);
   const [kicker, setKicker] = useState(defaults.kicker);
   const [tagline, setTagline] = useState(defaults.tagline);
-  const [effect, setEffect] = useState(p.initial.initialEffect);
+  // The effect KNOB left the UI (round 7) but the value still threads through
+  // preview + save: supersede matches on layout+format+theme+effect, so an old
+  // grain design opened here must keep its effect or re-saving would double-card.
+  const [effect] = useState(p.initial.initialEffect);
   const [theme, setTheme] = useState<'light' | 'dark'>(p.initial.initialTheme);
   const [previewUrl, setPreviewUrl] = useState('');
   const [previewErr, setPreviewErr] = useState('');
@@ -303,6 +305,22 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
                       {TOKENS.map((k) => <option value={k}>{k}</option>)}
                     </select>
                   </label>
+                  {(cfg.shapes?.length ?? 0) < 8 && (
+                    <button type="button" class="linkish"
+                      title="add a short accent rule under this text — drag it after"
+                      onClick={() =>
+                        addItem('shapes', {
+                          kind: 'rule',
+                          x: num(t.x),
+                          y: Math.min(0.98, num(t.y) + 0.11 * num(t.sizeScale, 1)),
+                          w: Math.min(num(t.w, 0.9), 0.22),
+                          h: 0.012,
+                          color: 'redDeep',
+                          opacity: 1,
+                        })}>
+                      + accent line
+                    </button>
+                  )}
                   <button type="button" class="linkish le-del" onClick={() => dropItem('texts', i)}>✕</button>
                 </div>
               </div>
@@ -359,12 +377,6 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
             <label class="le-num"><span>lockup</span>
               <select value={str(cfg.lockup, 'bottom')} onChange={(e) => patch({ lockup: (e.target as HTMLSelectElement).value })}>
                 {LOCKUPS.map((l) => <option value={l}>{l}</option>)}
-              </select>
-            </label>
-            <label class="le-num"><span>effect</span>
-              <select value={effect} onChange={(e) => setEffect((e.target as HTMLSelectElement).value)}>
-                <option value="">none</option>
-                {effects.map((e2) => <option value={e2.slug}>{e2.label}</option>)}
               </select>
             </label>
             <label class="le-num"><span>theme</span>

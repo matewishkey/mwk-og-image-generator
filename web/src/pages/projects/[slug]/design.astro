@@ -1,21 +1,33 @@
 ---
+/**
+ * The DESIGN page does ONE thing since round 7: assemble. Pick a TEMPLATE,
+ * see the current REVISION (template + slot assignments + words), swap any
+ * slot's picture, tweak the words, Render. Browsing finished renders lives on
+ * /results; fine geometry control lives in the editor; shot visibility lives
+ * on /shots. NOTHING auto-renders here — the engine runs only on intent.
+ *
+ * URL state: ?template=<layoutId>&revision=<designId>&theme=dark — pasteable,
+ * bookmarkable. Old ?style/?shot params are ignored; ?lead redirects into the
+ * revision model.
+ */
 import Base from '../../../layouts/Base.astro';
 import Icon from '../../../components/Icon.astro';
 import { ENV } from '../../../lib/runtime';
 import { loadProject } from '../../../lib/data';
 import {
   consumedPanels,
-  hasExplicitPanels,
+  layoutPanels,
+  selectPanels,
   LayoutConfigSchema,
+  type LayoutConfig,
 } from '../../../../../src/seam.ts';
 import {
-  ensurePackLink,
   generateAndRender,
-  renderAllFormats,
-  recastDesign,
   renderFromLayout,
+  rerenderDesign,
   reviseDesign,
   saveTemplate,
+  setPanel,
 } from '../../../lib/design-actions';
 import { resolvePanelTakes, scopeInventory } from '../../../lib/previews';
 
@@ -29,43 +41,38 @@ const bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
 const project = bundle.project;
 
-// ── The scope: which shot / style / theme this whole page works in.
-// Lives in the query string so a scope IS a pasteable, bookmarkable package.
 const q = Astro.url.searchParams;
-const scopeShot = /^\d+$/.test(q.get('shot') ?? '') ? Number(q.get('shot')) : null;
-const scopeStyle = bundle.styles.find((s) => s.slug === q.get('style')) ?? null;
+
+// Legacy bookmark: ?lead=<designId> becomes ?template=&revision=.
+if (q.get('lead')) {
+  const d = await env.DB.prepare(
+    `SELECT id, layout_id FROM design WHERE id = ?1 AND project_id = ?2`,
+  )
+    .bind(q.get('lead'), project.id)
+    .first<{ id: string; layout_id: string }>();
+  return Astro.redirect(
+    d ? `/projects/${slug}/design?template=${d.layout_id}&revision=${d.id}` : `/projects/${slug}/design`,
+  );
+}
+
 const scopeTheme = q.get('theme') === 'dark' ? ('dark' as const) : ('light' as const);
-/** Rebuild the query string with one key changed; null deletes the key. */
-const scoped = (patch: Record<string, string | null>) => {
-  const p = new URLSearchParams(q);
-  p.delete('lead');
+/** This page's URL with one key changed; null deletes the key. Legacy keys drop. */
+const tUrl = (patch: Record<string, string | null>) => {
+  const p = new URLSearchParams();
+  for (const k of ['template', 'revision', 'theme'] as const) {
+    const v = q.get(k);
+    if (v) p.set(k, v);
+  }
   for (const [k, v] of Object.entries(patch)) (v === null ? p.delete(k) : p.set(k, v));
   const s = p.toString();
   return `/projects/${slug}/design${s ? `?${s}` : ''}`;
 };
-const scopeQs = (() => {
-  const p = new URLSearchParams();
-  if (scopeShot != null) p.set('shot', String(scopeShot));
-  if (scopeStyle) p.set('style', scopeStyle.slug);
-  if (scopeTheme === 'dark') p.set('theme', 'dark');
-  return p.toString();
-})();
 
-// The inventory: one slot per shot, position-ordered and index-STABLE — hidden
-// shots and style gaps become null slots, they never shift panel indexes.
-const panels = await resolvePanelTakes(env, project.id, scopeStyle?.id);
+// The slot-stable inventory (style plays no part here — round 7).
+const panels = await resolvePanelTakes(env, project.id);
 const usableSlots = panels.filter((p) => !p.hidden && p.take_id).length;
-const pickedCount = panels.length
-  ? (
-      await env.DB.prepare(
-        `SELECT count(*) AS n FROM shot WHERE project_id = ?1 AND deleted_at IS NULL AND picked_take_id IS NOT NULL`,
-      )
-        .bind(project.id)
-        .first<{ n: number }>()
-    )?.n ?? 0
-  : 0;
 
-// House layouts plus NAMED team templates. Anonymous gen-* layouts stay out.
+// House layouts plus NAMED team templates; anonymous gen-* stay out.
 const layouts = await env.DB.prepare(
   `SELECT l.id, l.slug, l.name, l.config, t.kind AS team_kind FROM layout l JOIN team t ON t.id = l.team_id
     WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL
@@ -83,37 +90,43 @@ const ogFormat = formats.results.find((f) => f.slug === 'og') ?? formats.results
 const kitRow = await env.DB.prepare(`SELECT name, config FROM brand_kit WHERE id = ?1`)
   .bind(project.brand_kit_id)
   .first<{ name: string; config: string }>();
-const kitParsed = (() => {
+const kitHasDark = (() => {
   try {
-    return JSON.parse(kitRow?.config ?? '') as { colorsDark?: Record<string, string> };
+    const c = JSON.parse(kitRow?.config ?? '') as { colorsDark?: Record<string, string> };
+    return !!c.colorsDark && Object.keys(c.colorsDark).length > 0;
   } catch {
-    return {};
+    return false;
   }
 })();
-const kitHasDark = !!kitParsed.colorsDark && Object.keys(kitParsed.colorsDark).length > 0;
 
-// Which templates fit the current scope, and which shots each one uses.
-const shotIndexOfScope = scopeShot != null ? panels.findIndex((p) => p.position === scopeShot) : -1;
-const usable = layouts.results.flatMap((l) => {
+// Templates with meta: parsed config, slot count, does-it-fit, freshest thumb.
+const thumbRows = await env.DB.prepare(
+  `SELECT layout_id, thumb_key, max(created_at) AS created_at FROM design
+    WHERE project_id = ?1 GROUP BY layout_id`,
+)
+  .bind(project.id)
+  .all<{ layout_id: string; thumb_key: string }>();
+const thumbOf = new Map(thumbRows.results.map((r) => [r.layout_id, r.thumb_key]));
+
+interface Template {
+  id: string; slug: string; name: string; team_kind: string;
+  cfg: LayoutConfig; needs: number; fits: boolean; uses: string[]; thumb?: string;
+}
+const templates: Template[] = layouts.results.flatMap((l) => {
   const parsed = LayoutConfigSchema.safeParse(JSON.parse(l.config));
   if (!parsed.success) return [];
   const cfg = parsed.data;
   const consumed = consumedPanels(cfg);
-  const explicit = hasExplicitPanels(cfg);
-  const inv = scopeInventory(cfg, panels, scopeShot ?? undefined);
+  const inv = scopeInventory(cfg, panels);
   const fits = consumed.every((i) => inv[i] != null);
-  if (!fits) return [];
-  // Scoped to a shot: explicitly-wired templates only show when they use it.
-  if (scopeShot != null && explicit && shotIndexOfScope >= 0 && !consumed.includes(shotIndexOfScope))
-    return [];
-  const uses = consumed
-    .map((i) => (explicit || scopeShot == null ? panels[i] : inv[i]))
-    .filter(Boolean)
-    .map((p) => p!.label ?? `shot ${p!.position}`);
-  return [{ ...l, needs: consumed.length, uses: [...new Set(uses)] }];
+  const uses = [...new Set(consumed.map((i) => panels[i]).filter(Boolean).map((p) => p!.label ?? `shot ${p!.position}`))];
+  return [{
+    id: l.id, slug: l.slug, name: l.name, team_kind: l.team_kind,
+    cfg, needs: layoutPanels(cfg), fits, uses, thumb: thumbOf.get(l.id),
+  }];
 });
-const teamTemplates = usable.filter((l) => l.team_kind !== 'house');
-const houseLayouts = usable.filter((l) => l.team_kind === 'house');
+const teamTemplates = templates.filter((t) => t.team_kind !== 'house');
+const houseTemplates = templates.filter((t) => t.team_kind === 'house');
 
 const ctx = {
   teamId: team.id,
@@ -129,40 +142,64 @@ const ctx = {
 };
 
 let error = '';
-let genNote = q.get('gen') ?? '';
+const genNote = q.get('gen') ?? '';
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const action = String(form.getAll('action').at(-1) ?? 'render');
-  const back = `/projects/${slug}/design${scopeQs ? `?${scopeQs}` : ''}`;
+  const action = String(form.getAll('action').at(-1) ?? '');
+  const word = (k: string) => {
+    const v = form.get(k);
+    return v == null ? undefined : String(v);
+  };
+  /** Land on the new revision WITH its template selected — the POST may have
+   *  arrived on a URL that never carried ?template. */
+  const revisionUrl = async (designId: string) => {
+    const d = await env.DB.prepare(`SELECT layout_id FROM design WHERE id = ?1`)
+      .bind(designId)
+      .first<{ layout_id: string }>();
+    return tUrl({ template: d?.layout_id ?? null, revision: designId });
+  };
   try {
-    if (action === 'pack-link') {
-      await ensurePackLink(env, project.id);
-      return Astro.redirect(back);
-    } else if (action === 'hide-shot' || action === 'unhide-shot') {
-      const pos = Number(form.get('position'));
-      await env.DB.prepare(
-        `UPDATE shot SET hidden_at = ?1 WHERE project_id = ?2 AND position = ?3 AND deleted_at IS NULL`,
-      )
-        .bind(action === 'hide-shot' ? new Date().toISOString() : null, project.id, pos)
-        .run();
-      return Astro.redirect(back);
+    if (action === 'render') {
+      // First render of a template: resolve slots from the project inventory.
+      const layoutId = String(form.get('template') ?? '');
+      const id = await renderFromLayout(env, ctx, {
+        layoutId,
+        formats: [ogFormat],
+        themes: [scopeTheme],
+        title: word('title'),
+        kicker: word('kicker'),
+        tagline: word('tagline'),
+      });
+      return Astro.redirect(tUrl({ template: layoutId, revision: id }));
+    } else if (action === 'rerender') {
+      // Replay the revision's OWN slots; words/theme ride as overrides.
+      const designId = String(form.get('design') ?? '');
+      const id = await rerenderDesign(env, ctx, {
+        designId,
+        overrides: {
+          title: word('title'),
+          kicker: word('kicker'),
+          tagline: word('tagline'),
+          theme: scopeTheme,
+        },
+      });
+      return Astro.redirect(await revisionUrl(id));
+    } else if (action === 'set-panel') {
+      const id = await setPanel(env, ctx, {
+        designId: String(form.get('design') ?? ''),
+        position: Number(form.get('position')),
+        takeId: String(form.get('take') ?? ''),
+      });
+      return Astro.redirect(await revisionUrl(id));
     } else if (action === 'revise') {
-      const newLead = await reviseDesign(env, ctx, {
+      const id = await reviseDesign(env, ctx, {
         designId: String(form.get('design') ?? ''),
         instruction: String(form.get('instruction') ?? ''),
-        styleId: scopeStyle?.id,
-        shotPosition: scopeShot ?? undefined,
       });
-      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}lead=${newLead}`);
-    } else if (action === 'recast') {
-      const newLead = await recastDesign(env, ctx, {
-        designId: String(form.get('design') ?? ''),
-        shotPosition: Number(form.get('shot')),
-      });
-      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}lead=${newLead}`);
-    } else if (action === 'all-formats') {
-      await renderAllFormats(env, ctx, String(form.get('design') ?? ''), formats.results);
-      return Astro.redirect(back);
+      return Astro.redirect(await revisionUrl(id));
+    } else if (action === 'save-template') {
+      await saveTemplate(env, ctx, String(form.get('design') ?? ''), String(form.get('name') ?? ''));
+      return Astro.redirect(tUrl({ gen: 'template saved' }));
     } else if (action === 'generate') {
       const formatId = String(form.get('format') ?? ogFormat.id);
       const fmtRow = await env.DB.prepare(
@@ -171,103 +208,153 @@ if (Astro.request.method === 'POST') {
         .bind(formatId)
         .first<{ id: string; slug: string; name: string; width: number; height: number;
                  safe_w: number | null; safe_h: number | null }>();
-      const kitConfig = kitRow?.config;
       const { rendered, dropped } = await generateAndRender(env, ctx, {
         format: fmtRow ?? { ...ogFormat, safe_w: null, safe_h: null },
         brief: String(form.get('brief') ?? '').trim(),
         n: Math.max(2, Math.min(20, Number(form.get('n') ?? 8))),
-        kitConfig,
+        kitConfig: kitRow?.config,
       });
-      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}gen=${rendered}+rendered,+${dropped}+dropped`);
-    } else if (action === 'save-template') {
-      await saveTemplate(env, ctx, String(form.get('design') ?? ''), String(form.get('name') ?? ''));
-      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}gen=template+saved`);
-    } else {
-      // 'render' — a gallery card's Use button. Words come from the project
-      // (Settings is the one place to edit them); scope rides the render.
-      const layoutId = String(form.get('layout') ?? '');
-      if (!layoutId) throw new Error('Click Use on one of the layout cards to render it.');
-      const leadNew = await renderFromLayout(env, ctx, {
-        layoutId,
-        formats: [ogFormat],
-        themes: [scopeTheme],
-        styleId: scopeStyle?.id,
-        shotPosition: scopeShot ?? undefined,
-        title: project.title ?? undefined,
-        kicker: project.kicker ?? undefined,
-        tagline: project.tagline ?? undefined,
-      });
-      return Astro.redirect(`${back}${back.includes('?') ? '&' : '?'}lead=${leadNew}`);
+      return Astro.redirect(tUrl({ gen: `${rendered} rendered, ${dropped} dropped` }));
     }
+    throw new Error('unknown action');
   } catch (e) {
     error = (e as Error).message;
   }
 }
 
-// Archived-layout designs stay retired unless asked for; superseded rows never show.
-const showAllVersions = q.get('versions') === 'all';
-const designs = await env.DB.prepare(
-  `SELECT d.id, d.collection_id, d.title, d.tagline, d.kicker, d.r2_key, d.thumb_key, d.width, d.height, d.created_at,
-          d.effect, d.theme, l.name AS layout_name, l.team_id AS layout_team_id, l.id AS layout_id,
-          f.name AS format_name, f.slug AS format_slug
-     FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
-    WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
-      AND (l.archived_at IS NULL OR ?2)
-    ORDER BY d.created_at DESC`,
-)
-  .bind(project.id, showAllVersions ? 1 : 0)
-  .all<{
-    id: string; collection_id: string | null; title: string | null; tagline: string | null;
-    kicker: string | null; r2_key: string; thumb_key: string; width: number; height: number;
-    created_at: string; effect: string | null; theme: string; layout_name: string;
-    layout_team_id: string; layout_id: string; format_name: string; format_slug: string;
-  }>();
-
-type DesignRow = (typeof designs.results)[number];
-const leadId = q.get('lead');
-const lead: DesignRow | undefined =
-  designs.results.find((d) => d.id === leadId) ?? designs.results[0];
-const versions = designs.results.filter((d) => d.id !== lead?.id);
-// The lead's set: its collection siblings, as one-click format switches.
-const leadSiblings = lead?.collection_id
-  ? designs.results.filter((d) => d.collection_id === lead.collection_id && d.id !== lead.id)
-  : [];
-// Versions grouped: one entry per collection (newest-first), solos as themselves.
-const versionGroups: { key: string; label: string; theme: string; rows: DesignRow[] }[] = [];
-{
-  const seen = new Set<string>();
-  for (const d of versions) {
-    const key = d.collection_id ?? `solo-${d.id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const rows = d.collection_id ? versions.filter((v) => v.collection_id === d.collection_id) : [d];
-    versionGroups.push({ key, label: d.layout_name, theme: d.theme, rows });
+// ── The current template: ?template, else the newest design's layout.
+let currentTemplate: Template | undefined = templates.find((t) => t.id === q.get('template'));
+if (!currentTemplate && !q.get('template')) {
+  // Default to the newest design whose template is actually LISTED above
+  // (anonymous gen-* and archived layouts aren't; walking past them keeps the
+  // workspace populated instead of blank).
+  const recent = await env.DB.prepare(
+    `SELECT layout_id, max(created_at) AS newest FROM design
+      WHERE project_id = ?1 AND superseded_by_id IS NULL
+      GROUP BY layout_id ORDER BY newest DESC LIMIT 40`,
+  )
+    .bind(project.id)
+    .all<{ layout_id: string }>();
+  for (const r of recent.results) {
+    currentTemplate = templates.find((t) => t.id === r.layout_id);
+    if (currentTemplate) break;
   }
 }
 
-const leadPanels = lead
+// ── Revisions of that template (non-superseded, newest first).
+interface RevisionRow {
+  id: string; r2_key: string; thumb_key: string; title: string | null; kicker: string | null;
+  tagline: string | null; theme: string; created_at: string; format_slug: string;
+  format_name: string; width: number; height: number; collection_id: string | null;
+}
+const revisions = currentTemplate
   ? (
       await env.DB.prepare(
-        `SELECT p.position, p.label, t.art_key FROM design_panel p
-           JOIN take t ON t.id = p.take_id
+        `SELECT d.id, d.r2_key, d.thumb_key, d.title, d.kicker, d.tagline, d.theme, d.created_at,
+                d.collection_id, d.width, d.height, f.slug AS format_slug, f.name AS format_name
+           FROM design d JOIN format f ON f.id = d.format_id
+          WHERE d.project_id = ?1 AND d.layout_id = ?2 AND d.superseded_by_id IS NULL
+          ORDER BY d.created_at DESC`,
+      )
+        .bind(project.id, currentTemplate.id)
+        .all<RevisionRow>()
+    ).results
+  : [];
+const currentRevision: RevisionRow | undefined =
+  revisions.find((r) => r.id === q.get('revision')) ??
+  revisions.find((r) => r.theme === scopeTheme) ??
+  revisions[0];
+
+// ── The revision's slots (its OWN design_panel rows), for the strip + swaps.
+interface SlotRow {
+  position: number; label: string | null; take_id: string | null;
+  thumb: string | null; art_key: string | null; shot_position: number | null;
+}
+const slots: SlotRow[] = currentRevision
+  ? (
+      await env.DB.prepare(
+        `SELECT p.position, p.label, p.take_id,
+                coalesce(t.art_thumb_key, t.art_key, r.r2_key) AS thumb,
+                coalesce(t.art_key, r.r2_key) AS art_key,
+                sh.position AS shot_position
+           FROM design_panel p
+           LEFT JOIN take t ON t.id = p.take_id
+           LEFT JOIN shot sh ON sh.id = t.shot_id
+           LEFT JOIN reference r ON r.id = p.reference_id
           WHERE p.design_id = ?1 ORDER BY p.position`,
       )
-        .bind(lead.id)
-        .all<{ position: number; label: string | null; art_key: string | null }>()
-    ).results.filter((p) => p.art_key)
+        .bind(currentRevision.id)
+        .all<SlotRow>()
+    ).results
   : [];
 
-// Cached previews, keyed exactly like the refresh API composes its refs.
-const scopeSuffix =
-  (scopeStyle ? `@s-${scopeStyle.slug}` : '') +
-  (scopeShot != null ? `@p-${scopeShot}` : '') +
-  (scopeTheme === 'dark' ? '@t-dark' : '');
-const previewRows = await env.DB.prepare(
-  `SELECT kind, ref_id, r2_key FROM preview WHERE project_id = ?1`,
-)
-  .bind(project.id)
-  .all<{ kind: string; ref_id: string; r2_key: string }>();
-const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id}`, p.r2_key]));
+// ── No revision yet: a $0.00 client-side schematic of what Render would use.
+let prospective: { thumb: string | null; label: string }[] = [];
+let prospectiveErr = '';
+if (currentTemplate && !currentRevision) {
+  try {
+    prospective = selectPanels(currentTemplate.cfg, scopeInventory(currentTemplate.cfg, panels)).map((p) => ({
+      thumb: p.art_thumb_key ?? p.art_key,
+      label: p.label ?? `shot ${p.position}`,
+    }));
+  } catch (e) {
+    prospectiveErr = (e as Error).message;
+  }
+}
+/** Approximate cell rects for the schematic — freeform cells carry their own
+ *  fractions; archetypes get a rough sketch (the render is the truth). */
+const schematicRects = (cfg: LayoutConfig): { x: number; y: number; w: number; h: number }[] => {
+  if (cfg.cells?.length) return cfg.cells.map((c) => ({ x: c.x, y: c.y, w: c.w, h: c.h }));
+  const s = cfg.split ?? 0.5;
+  switch (cfg.archetype) {
+    case 'hero': return [{ x: 0, y: 0, w: 1, h: 1 }];
+    case 'diptych': return [{ x: 0, y: 0, w: s, h: 1 }, { x: s, y: 0, w: 1 - s, h: 1 }];
+    case 'stack': return [{ x: 0, y: 0, w: 1, h: s }, { x: 0, y: s, w: 1, h: 1 - s }];
+    case 'triptych': return [0, 1, 2].map((i) => ({ x: i / 3, y: 0, w: 1 / 3, h: 1 }));
+    case 'mosaic': {
+      const f = cfg.split ?? 0.62;
+      return [{ x: 0, y: 0, w: f, h: 1 }, { x: f, y: 0, w: 1 - f, h: 0.5 }, { x: f, y: 0.5, w: 1 - f, h: 0.5 }];
+    }
+    case 'quad': return [0, 1, 2, 3].map((i) => ({ x: (i % 2) / 2, y: Math.floor(i / 2) / 2, w: 0.5, h: 0.5 }));
+    case 'filmstrip': return [0, 1, 2, 3].map((i) => ({ x: i / 4, y: 0, w: 0.25, h: 1 }));
+    default: return [];
+  }
+};
+const schematic = currentTemplate && !currentRevision && prospective.length
+  ? schematicRects(currentTemplate.cfg).map((r, i) => ({ ...r, ...prospective[i]! }))
+  : [];
+
+// ── Every succeeded take, grouped by shot — the swap picker's inventory.
+const swapTakes = currentRevision
+  ? (
+      await env.DB.prepare(
+        `SELECT t.id, coalesce(t.art_thumb_key, t.art_key) AS thumb, t.model_alias, t.iteration,
+                sh.position AS shot_position, sh.label AS shot_label,
+                (t.id = sh.picked_take_id) AS picked, s.name AS style_name
+           FROM take t JOIN shot sh ON sh.id = t.shot_id JOIN style s ON s.id = t.style_id
+          WHERE sh.project_id = ?1 AND sh.deleted_at IS NULL
+            AND t.status = 'succeeded' AND t.art_key IS NOT NULL
+          ORDER BY sh.position, t.created_at DESC`,
+      )
+        .bind(project.id)
+        .all<{ id: string; thumb: string | null; model_alias: string; iteration: number;
+               shot_position: number; shot_label: string | null; picked: number; style_name: string }>()
+    ).results
+  : [];
+const swapGroups = (() => {
+  const g = new Map<number, { label: string; takes: typeof swapTakes }>();
+  for (const t of swapTakes) {
+    if (!g.has(t.shot_position)) g.set(t.shot_position, { label: t.shot_label ?? `shot ${t.shot_position}`, takes: [] });
+    g.get(t.shot_position)!.takes.push(t);
+  }
+  return [...g.entries()].map(([position, v]) => ({ position, ...v }));
+})();
+
+const words = {
+  title: currentRevision?.title ?? project.title ?? '',
+  kicker: currentRevision?.kicker ?? project.kicker ?? '',
+  tagline: currentRevision?.tagline ?? project.tagline ?? '',
+};
 ---
 
 <Base title={`${project.name} · design`} nav="projects" project={{ slug, name: project.name, active: 'design' }}>
@@ -275,9 +362,9 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
     <p class="kicker"><span class="g">/</span>{project.name}</p>
     <h1>Design</h1>
     <p class="sub">
-      Pick a picture and a style below — every template renders with YOUR choice, free.
-      Fine control lives in <a href={`/projects/${slug}/design/editor`}>the editor</a>;
-      words and kit live in <a href={`/projects/${slug}/settings`}>settings</a>.
+      Pick a template, place your pictures, say the words — then Render.
+      Finished cards live on <a href={`/projects/${slug}/results`}>Results</a>;
+      fine control in <a href={`/projects/${slug}/design/editor`}>the editor</a>.
     </p>
   </div>
 
@@ -288,182 +375,218 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
     panels.length === 0 ? (
       <p class="sub">
         No takes yet. Go to <a href={`/projects/${slug}/shots`}>Shots &amp; takes</a> and run the
-        shots — the previews here appear as soon as drafts exist.
+        shots — as soon as pictures exist, the templates here can place them.
       </p>
     ) : (
       <>
-        <section class="scope card">
-          <p class="kicker"><span class="g">/</span>Working with — the picture and look every card below uses</p>
-          <div class="scope-row">
-            <span class="scope-label mono">picture</span>
-            <a class:list={['chip', { on: scopeShot == null }]} href={scoped({ shot: null })}>all shots</a>
-            {panels.map((p) => (
-              <span class:list={['shot-chip', { hidden: !!p.hidden }]}>
-                <a
-                  class:list={['chip', 'chip-img', { on: scopeShot === p.position }]}
-                  href={scoped({ shot: String(p.position) })}
-                  title={p.hidden ? 'hidden — not feeding designs' : undefined}
-                >
-                  {p.art_thumb_key && <img src={`/img/${p.art_thumb_key}`} alt="" loading="lazy" />}
-                  {p.label ?? `shot ${p.position}`}
-                </a>
-                <form method="post" class="hide-form">
-                  <input type="hidden" name="action" value={p.hidden ? 'unhide-shot' : 'hide-shot'} />
-                  <input type="hidden" name="position" value={p.position} />
-                  <button class="eye" type="submit" title={p.hidden ? 'unhide this shot' : 'hide this shot from designs'}>
-                    <Icon name={p.hidden ? 'watch' : 'hide'} />{p.hidden ? 'unhide' : 'hide'}
-                  </button>
-                </form>
-              </span>
-            ))}
-          </div>
-          {bundle.styles.length > 1 && (
-            <div class="scope-row">
-              <span class="scope-label mono">style</span>
-              <a class:list={['chip', { on: !scopeStyle }]} href={scoped({ style: null })}>any style</a>
-              {bundle.styles.map((s) => (
-                <a class:list={['chip', { on: scopeStyle?.id === s.id }]} href={scoped({ style: s.slug })}>
-                  {s.name}{s.id === project.default_style_id ? ' ·  primary' : ''}
-                </a>
-              ))}
-            </div>
-          )}
-          {kitHasDark && (
-            <div class="scope-row">
-              <span class="scope-label mono">theme</span>
-              <a class:list={['chip', { on: scopeTheme === 'light' }]} href={scoped({ theme: null })}>light</a>
-              <a class:list={['chip', { on: scopeTheme === 'dark' }]} href={scoped({ theme: 'dark' })}>dark</a>
-            </div>
-          )}
-          <p class="scope-note mono">
-            {scopeShot != null || scopeStyle
-              ? `Scoped: ${scopeShot != null ? (panels.find((p) => p.position === scopeShot)?.label ?? `shot ${scopeShot}`) : 'all shots'} · ${scopeStyle?.name ?? 'any style'} — ${usable.length} template${usable.length === 1 ? '' : 's'} fit. This URL is the package: bookmark it, switch by clicking.`
-              : `${usableSlots} of ${panels.length} shots feeding designs (${pickedCount} picked) — scope to one to work on it.`}
+        <section class="tpl">
+          <p class="kicker">
+            <span class="g">/</span>Template — the design itself: slots, words, colors. Pick one; nothing renders until you say so.
           </p>
-        </section>
-
-        {
-          lead && (
-            <section class="lead">
-              <p class="kicker"><span class="g">/</span>Current card{leadSiblings.length ? ' — one click switches format' : ''}</p>
-              <figure class="lead-card">
-                <a href={`/img/${lead.r2_key}`} target="_blank">
-                  <img src={`/img/${lead.r2_key}`} alt={lead.format_name} />
-                </a>
-                <figcaption>
-                  <b>{lead.layout_name}</b>
-                  <span class="mono faint">
-                    {lead.format_slug} · {lead.width}×{lead.height}{lead.effect ? ` · ${lead.effect}` : ''}
-                    {lead.theme === 'dark' ? ' · dark' : ''}
-                  </span>
-                  {leadSiblings.length > 0 && (
-                    <span class="fmt-chips">
-                      {leadSiblings.map((d) => (
-                        <a class="chip" href={scoped({}) + (scoped({}).includes('?') ? '&' : '?') + `lead=${d.id}`}>{d.format_slug}</a>
-                      ))}
-                    </span>
-                  )}
-                  <span class="lead-actions">
-                    <form method="post">
-                      <input type="hidden" name="action" value="all-formats" />
-                      <input type="hidden" name="design" value={lead.id} />
-                      <button class="btn small" type="submit" data-running="Rendering…"><Icon name="run" />All {formats.results.length} formats</button>
-                    </form>
-                    <a class="btn small ghost" href={`/projects/${slug}/preview?design=${lead.id}`}><Icon name="watch" />Preview</a>
-                    <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${lead.layout_id}&design=${lead.id}${scopeQs ? `&${scopeQs}` : ''}`}><Icon name="edit" />Open in editor</a>
-                    <a class="btn small ghost" href={`/img/${lead.r2_key}`} download={`${slug}-${lead.format_slug}.png`}><Icon name="download" />Download</a>
-                    {lead.collection_id && (
-                      <a class="btn small" href={`/api/projects/${slug}/zip?collection=${lead.collection_id}`}>
-                        <Icon name="download" />Download all {leadSiblings.length + 1} (zip)
-                      </a>
-                    )}
-                    {leadPanels.map((p) => (
-                      <a class="btn small ghost" href={`/img/${p.art_key}`} download={`${slug}-${p.label ?? `panel-${p.position}`}-raw.png`}>
-                        <Icon name="download" />Raw {leadPanels.length > 1 ? p.label ?? p.position : 'picture'}
+          {[
+            { title: 'Your templates', items: teamTemplates },
+            { title: 'House', items: houseTemplates },
+          ].map(
+            (group) =>
+              group.items.length > 0 && (
+                <div class="tpl-group">
+                  <p class="tpl-head mono">{group.title}</p>
+                  <div class="tpl-grid">
+                    {group.items.map((t) => (
+                      <a
+                        class:list={['tpl-card', { on: currentTemplate?.id === t.id, unfit: !t.fits }]}
+                        href={tUrl({ template: t.id, revision: null })}
+                      >
+                        {t.thumb ? (
+                          <img src={`/img/${t.thumb}`} alt={`${t.name} — last render`} loading="lazy" />
+                        ) : (
+                          <span class="tpl-blank" aria-hidden="true">
+                            <span class="tpl-blank-name">{t.name}</span>
+                          </span>
+                        )}
+                        <span class="tpl-meta">
+                          <b>{t.name}</b>
+                          <span class="mono faint">
+                            {t.needs} slot{t.needs === 1 ? '' : 's'}
+                            {!t.fits ? ' · needs shots this project can’t feed' : ''}
+                          </span>
+                        </span>
                       </a>
                     ))}
-                  </span>
-                  {panels.filter((pp) => !pp.hidden && pp.take_id).length > 1 && (
-                    <form method="post" class="recast-row">
-                      <input type="hidden" name="action" value="recast" />
-                      <input type="hidden" name="design" value={lead.id} />
-                      <span class="mono faint">same template, other picture:</span>
-                      {panels.filter((pp) => !pp.hidden && pp.take_id).map((pp) => (
-                        <button class="chip" type="submit" name="shot" value={pp.position} data-running="Rendering…">
-                          {pp.label ?? `shot ${pp.position}`}
-                        </button>
-                      ))}
-                    </form>
-                  )}
-                  <form method="post" class="revise-form">
-                    <input type="hidden" name="action" value="revise" />
-                    <input type="hidden" name="design" value={lead.id} />
-                    <input
-                      type="text"
-                      name="instruction"
-                      placeholder="tell it what to change — e.g. move the text left, my picture a little right"
-                    />
-                    <button class="btn small" type="submit" data-running="Revising — ~20 seconds…">
-                      <Icon name="cowrite" />Change it · under a cent
-                    </button>
-                  </form>
-                  {lead.layout_team_id === team.id && (
-                    <form method="post" class="save-template">
-                      <input type="hidden" name="action" value="save-template" />
-                      <input type="hidden" name="design" value={lead.id} />
-                      <input type="text" name="name" placeholder="save this layout as a template…" />
-                      <button class="btn small ghost" type="submit"><Icon name="template" />Save</button>
-                    </form>
-                  )}
+                  </div>
+                </div>
+              ),
+          )}
+        </section>
+
+        {currentTemplate && (
+          <section class="ws card">
+            <p class="kicker">
+              <span class="g">/</span>Working on: <b>{currentTemplate.name}</b>
+              {revisions.length > 0 && (
+                <>
+                  {' '}— {revisions.length} revision{revisions.length === 1 ? '' : 's'} ·{' '}
+                  <a href={`/projects/${slug}/results?template=${currentTemplate.id}`}>Results →</a>
+                </>
+              )}
+            </p>
+
+            {currentRevision ? (
+              <figure class="rev-card">
+                <a href={`/img/${currentRevision.r2_key}`} target="_blank">
+                  <img src={`/img/${currentRevision.r2_key}`} alt={currentRevision.format_name} />
+                </a>
+                <figcaption class="mono faint">
+                  {currentRevision.format_slug} · {currentRevision.width}×{currentRevision.height}
+                  {currentRevision.theme === 'dark' ? ' · dark' : ''}
+                  <a class="btn small ghost" href={`/img/${currentRevision.r2_key}`} download={`${slug}-${currentRevision.format_slug}.png`}>
+                    <Icon name="download" />Download
+                  </a>
+                  <a class="btn small ghost" href={`/projects/${slug}/preview?design=${currentRevision.id}`}>
+                    <Icon name="watch" />In context
+                  </a>
+                  <a class="btn small ghost" href={`/projects/${slug}/design/editor?from=${currentTemplate.id}&design=${currentRevision.id}`}>
+                    <Icon name="edit" />Editor
+                  </a>
                 </figcaption>
               </figure>
-            </section>
-          )
-        }
-
-        {[
-          { title: 'Your templates', items: teamTemplates },
-          { title: 'House layouts', items: houseLayouts },
-        ].map(
-          (group) =>
-            group.items.length > 0 && (
-              <section class="gallery">
-                <p class="kicker">
-                  <span class="g">/</span>{group.title} — with your picture; click Use to make a real card, free
+            ) : prospectiveErr ? (
+              <p class="flash">{prospectiveErr}</p>
+            ) : (
+              <div class="schematic-wrap">
+                <div class="schematic" style={`aspect-ratio: ${ogFormat.width} / ${ogFormat.height}`}>
+                  {schematic.map((c) => (
+                    <span class="sch-cell" style={`left:${c.x * 100}%;top:${c.y * 85}%;width:${c.w * 100}%;height:${c.h * 85}%`}>
+                      {c.thumb && <img src={`/img/${c.thumb}`} alt="" loading="lazy" />}
+                      <i>{c.label}</i>
+                    </span>
+                  ))}
+                  <span class="sch-band mono">brand band</span>
+                </div>
+                <p class="mono faint">
+                  schematic — the pictures Render will place. The real card (with your kit, words and
+                  typography) is one click and $0.00.
                 </p>
-                <div class="pv-grid pv-layouts">
-                  {group.items.map((l) => (
-                    <figure class="pv-card">
-                      <img
-                        data-pv-kind="layout"
-                        data-pv-ref={l.id}
-                        src={previewKey.has(`layout:${l.id}${scopeSuffix}`) ? `/img/${previewKey.get(`layout:${l.id}${scopeSuffix}`)}` : undefined}
-                        alt={`${l.name} preview`}
-                        loading="lazy"
-                      />
-                      <figcaption>
-                        <b>{l.name}</b>
-                        <span class="mono faint">uses {l.uses.join(' · ') || `${l.needs} image${l.needs === 1 ? '' : 's'}`}</span>
-                        <form method="post" class="use-form">
-                          <input type="hidden" name="action" value="render" />
-                          <button class="btn small" type="submit" name="layout" value={l.id} data-running="Rendering…">
-                            <Icon name="run" />Use
+              </div>
+            )}
+
+            {currentRevision && slots.length > 0 && (
+              <div class="slot-strip">
+                <p class="ws-mini">Slots — the pictures in this revision; swap any one, the rest stay put</p>
+                <div class="slot-row">
+                  {slots.map((sl) => (
+                    <span class="slot-tile">
+                      {sl.thumb && <img src={`/img/${sl.thumb}`} alt="" loading="lazy" />}
+                      <span class="mono faint">
+                        {sl.position}. {sl.label ?? (sl.shot_position != null ? `shot ${sl.shot_position}` : 'upload')}
+                      </span>
+                      <span class="slot-actions">
+                        {swapGroups.length > 0 && (
+                          <button class="btn small ghost" type="button" data-swap-slot={sl.position}>
+                            <Icon name="media" />Swap
                           </button>
-                        </form>
-                      </figcaption>
-                    </figure>
+                        )}
+                        {sl.art_key && (
+                          <a class="btn small ghost" href={`/img/${sl.art_key}`} download={`${slug}-${sl.label ?? `slot-${sl.position}`}-raw.png`}>
+                            <Icon name="download" />Raw
+                          </a>
+                        )}
+                      </span>
+                    </span>
                   ))}
                 </div>
-              </section>
-            ),
+              </div>
+            )}
+
+            <form method="post" class="words-form">
+              <input type="hidden" name="action" value={currentRevision ? 'rerender' : 'render'} />
+              {currentRevision ? (
+                <input type="hidden" name="design" value={currentRevision.id} />
+              ) : (
+                <input type="hidden" name="template" value={currentTemplate.id} />
+              )}
+              <p class="ws-mini">Words — this revision's text (asterisks *accent* a word in the kit's accent color)</p>
+              <div class="words-grid">
+                <label class="field"><span>Title</span>
+                  <input type="text" name="title" value={words.title} /></label>
+                <label class="field"><span>Kicker (label above)</span>
+                  <input type="text" name="kicker" value={words.kicker} /></label>
+                <label class="field"><span>Tagline (line below)</span>
+                  <input type="text" name="tagline" value={words.tagline} /></label>
+              </div>
+              <div class="render-row">
+                {kitHasDark && (
+                  <span class="theme-chips">
+                    <a class:list={['chip', { on: scopeTheme === 'light' }]} href={tUrl({ theme: null })}>light</a>
+                    <a class:list={['chip', { on: scopeTheme === 'dark' }]} href={tUrl({ theme: 'dark' })}>dark</a>
+                  </span>
+                )}
+                <button class="btn" type="submit" data-running="Rendering…">
+                  <Icon name="run" />{currentRevision ? 'Render · $0.00' : 'Render the first card · $0.00'}
+                </button>
+                <span class="mono faint">
+                  {currentRevision
+                    ? 'same words + pictures refreshes this card; any change makes a new revision beside it'
+                    : `renders the ${ogFormat.slug} card with the slots above`}
+                </span>
+              </div>
+            </form>
+
+            {currentRevision && (
+              <>
+                <form method="post" class="revise-form">
+                  <input type="hidden" name="action" value="revise" />
+                  <input type="hidden" name="design" value={currentRevision.id} />
+                  <input
+                    type="text"
+                    name="instruction"
+                    placeholder="tell it what to change — e.g. move the text left, my picture a little right"
+                  />
+                  <button class="btn small" type="submit" data-running="Revising — ~20 seconds…">
+                    <Icon name="cowrite" />Change it · under a cent
+                  </button>
+                </form>
+                {currentTemplate.team_kind !== 'house' && (
+                  <form method="post" class="save-template">
+                    <input type="hidden" name="action" value="save-template" />
+                    <input type="hidden" name="design" value={currentRevision.id} />
+                    <input type="text" name="name" placeholder="save this template under a new name…" />
+                    <button class="btn small ghost" type="submit"><Icon name="template" />Save</button>
+                  </form>
+                )}
+              </>
+            )}
+          </section>
         )}
-        {usable.length === 0 && (
-          <p class="sub">No template fits this scope — unhide a shot or clear the scope above.</p>
+
+        {currentRevision && swapGroups.length > 0 && (
+          <dialog id="swap-dialog">
+            <form method="post" class="swap-form">
+              <input type="hidden" name="action" value="set-panel" />
+              <input type="hidden" name="design" value={currentRevision.id} />
+              <input type="hidden" name="position" value="" id="swap-position" />
+              <p class="kicker"><span class="g">/</span>Put another picture in slot <span id="swap-slot-no"></span></p>
+              {swapGroups.map((g) => (
+                <div class="swap-group">
+                  <p class="ws-mini">{g.label}</p>
+                  <div class="swap-grid">
+                    {g.takes.map((t) => (
+                      <button class="swap-take" type="submit" name="take" value={t.id} data-running="Rendering…">
+                        {t.thumb && <img src={`/img/${t.thumb}`} alt="" loading="lazy" />}
+                        <span class="mono faint">{t.model_alias} #{t.iteration}{t.picked ? ' · picked' : ''} · {t.style_name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <button class="btn small ghost swap-close" type="button" id="swap-cancel">Close</button>
+            </form>
+          </dialog>
         )}
 
         <form method="post" class="design-form card generate-form">
           <input type="hidden" name="action" value="generate" />
-          <p class="inventory mono">Or let the model propose arrangements — it writes configs, the renderer draws them.</p>
+          <p class="inventory mono">Need more templates? Let the model propose arrangements — it writes configs, the renderer draws them.</p>
           <div class="form-grid">
             <label class="field">
               <span>Direction (optional) — <button type="button" class="linkish" id="brief-minimal">minimal</button> fills a quiet brief</span>
@@ -488,117 +611,34 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
             </label>
           </div>
           <button class="btn ghost" type="submit" data-running="Designing — twenty seconds or so…"><Icon name="template" />Generate layouts · under a cent</button>
-          <script is:inline>
-            document.getElementById('brief-minimal')?.addEventListener('click', () => {
-              const b = document.getElementById('brief-input');
-              b.value = 'minimal and quiet: one image or two at most, generous empty space, no shapes, at most one small text layer';
-              b.focus();
-            });
-          </script>
         </form>
 
-        {
-          versionGroups.length > 0 && (
-            <section class="versions">
-              <p class="kicker">
-                <span class="g">/</span>Versions — grouped by render set; click one to lead
-                {showAllVersions ? (
-                  <a href={scoped({ versions: null })}>hide retired</a>
-                ) : (
-                  <a href={scoped({ versions: 'all' })}>show retired too</a>
-                )}
-              </p>
-              <div class="vgroups">
-                {versionGroups.map((g) => (
-                  <figure class="vgroup design-card">
-                    <a href={scoped({}) + (scoped({}).includes('?') ? '&' : '?') + `lead=${g.rows[0]!.id}`}>
-                      <img src={`/img/${g.rows[0]!.thumb_key}`} alt={g.label} loading="lazy" />
-                    </a>
-                    <figcaption>
-                      <span>{g.label}</span>
-                      <span class="mono faint">{g.theme === 'dark' ? 'dark · ' : ''}{g.rows.length === 1 ? g.rows[0]!.format_slug : `${g.rows.length} formats`}</span>
-                      {g.rows.length > 1 && (
-                        <span class="fmt-chips">
-                          {g.rows.map((d) => (
-                            <a class="chip" href={scoped({}) + (scoped({}).includes('?') ? '&' : '?') + `lead=${d.id}`}>{d.format_slug}</a>
-                          ))}
-                        </span>
-                      )}
-                      {g.rows.length > 1 && g.rows[0]!.collection_id ? (
-                        <a class="btn small ghost" href={`/api/projects/${slug}/zip?collection=${g.rows[0]!.collection_id}`} title="Download the whole set"><Icon name="download" />zip</a>
-                      ) : (
-                        <a class="btn small ghost" href={`/img/${g.rows[0]!.r2_key}`} download={`${slug}-${g.rows[0]!.format_slug}.png`} title="Download"><Icon name="download" />PNG</a>
-                      )}
-                    </figcaption>
-                  </figure>
-                ))}
-              </div>
-            </section>
-          )
-        }
-
-        <p class="pack-bar">
-          {
-            (project as unknown as { pack_token: string | null }).pack_token ? (
-              <>
-                <span class="kicker"><span class="g">/</span>Pack</span>
-                <a class="mono" href={`/pack/${(project as unknown as { pack_token: string }).pack_token}`} target="_blank">
-                  {`${env.PUBLIC_ORIGIN}/pack/${(project as unknown as { pack_token: string }).pack_token.slice(0, 10)}…`}
-                </a>
-                <span class="faint">— the whole concept behind one link, for the social generator. Add .json for machines.</span>
-              </>
-            ) : (
-              <form method="post">
-                <input type="hidden" name="action" value="pack-link" />
-                <button class="btn small ghost" type="submit"><Icon name="pack" />Create pack link</button>
-              </form>
-            )
-          }
-          <span class="faint">Kit: {kitRow?.name ?? '?'} · words: “{project.title ?? '—'}” — <a href={`/projects/${slug}/settings`}>change in settings</a></span>
+        <p class="foot-note mono faint">
+          {usableSlots} of {panels.length} shots feeding designs — manage visibility on
+          <a href={`/projects/${slug}/shots`}> Shots &amp; takes</a> ·
+          kit: {kitRow?.name ?? '?'} — <a href={`/projects/${slug}/settings`}>settings</a>
         </p>
 
-        <script is:inline define:vars={{ slug, scopeStyle: scopeStyle?.slug ?? null, scopeShot, scopeTheme }}>
-          // Refresh every preview card under the CURRENT scope. Cached images
-          // paint instantly but wear a "checking" shimmer until the API
-          // confirms they're fresh for this exact scope.
+        <script is:inline>
+          document.getElementById('brief-minimal')?.addEventListener('click', () => {
+            const b = document.getElementById('brief-input');
+            b.value = 'minimal and quiet: one image or two at most, generous empty space, no shapes, at most one small text layer';
+            b.focus();
+          });
+          // The swap picker — a modal is house-legal for pickers. The slot's
+          // Swap button opens it and stamps the position into the form.
           (() => {
-            const imgs = [...document.querySelectorAll('img[data-pv-kind]')];
-            const queue = [...imgs];
-            imgs.forEach((i) => {
-              i.closest('.pv-card')?.classList.add(i.getAttribute('src') ? 'pv-checking' : 'pv-loading');
+            const dlg = document.getElementById('swap-dialog');
+            if (!dlg) return;
+            document.querySelectorAll('[data-swap-slot]').forEach((b) => {
+              b.addEventListener('click', () => {
+                document.getElementById('swap-position').value = b.dataset.swapSlot;
+                document.getElementById('swap-slot-no').textContent = b.dataset.swapSlot;
+                dlg.showModal();
+              });
             });
-            let active = 0;
-            const MAX = 3;
-            const pump = () => {
-              while (active < MAX && queue.length) {
-                const img = queue.shift();
-                active++;
-                const body = { kind: img.dataset.pvKind, ref: img.dataset.pvRef };
-                if (img.dataset.pvKind === 'layout') {
-                  if (scopeStyle) body.style = scopeStyle;
-                  if (scopeShot != null) body.shot = scopeShot;
-                  if (scopeTheme === 'dark') body.theme = 'dark';
-                }
-                fetch(`/api/projects/${slug}/previews`, {
-                  method: 'POST',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify(body),
-                })
-                  .then((r) => (r.ok ? r.json() : r.json().then((e) => Promise.reject(new Error(e?.error ?? r.status)))))
-                  .then((d) => {
-                    if (img.getAttribute('src') !== d.url) img.src = d.url;
-                    img.closest('.pv-card')?.classList.remove('pv-loading', 'pv-checking', 'pv-failed');
-                  })
-                  .catch((e) => {
-                    const card = img.closest('.pv-card');
-                    card?.classList.remove('pv-loading', 'pv-checking');
-                    card?.classList.add('pv-failed');
-                    if (card) card.title = String(e.message ?? 'preview unavailable');
-                  })
-                  .finally(() => { active--; pump(); });
-              }
-            };
-            pump();
+            document.getElementById('swap-cancel')?.addEventListener('click', () => dlg.close());
+            dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
           })();
         </script>
       </>
@@ -607,66 +647,99 @@ const previewKey = new Map(previewRows.results.map((p) => [`${p.kind}:${p.ref_id
 </Base>
 
 <style>
-  .design-form { margin-bottom: 2rem; }
-  .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
-  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
-  .form-grid > * { min-width: 0; }
+  .flash { margin-bottom: 1rem; }
 
-  .scope { margin-bottom: 1.6rem; padding: 0.9rem 1.1rem; }
-  .scope .kicker { margin-bottom: 0.7rem; }
-  .scope-row { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
-  .scope-label { color: var(--faint); font-size: 0.72rem; min-width: 3.4rem; text-transform: uppercase; letter-spacing: 0.08em; }
+  .tpl { margin-bottom: 1.8rem; }
+  .tpl > .kicker { margin-bottom: 0.8rem; }
+  .tpl-group { margin-bottom: 1rem; }
+  .tpl-head { color: var(--faint); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.5rem; }
+  .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.7rem; }
+  .tpl-grid > * { min-width: 0; }
+  .tpl-card {
+    display: block; background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); overflow: hidden; text-decoration: none; color: inherit;
+  }
+  .tpl-card.on { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+  .tpl-card.unfit { opacity: 0.5; }
+  .tpl-card img { display: block; width: 100%; aspect-ratio: 1200 / 630; height: auto; object-fit: cover; background: var(--surface-2); }
+  .tpl-blank {
+    display: flex; align-items: center; justify-content: center;
+    aspect-ratio: 1200 / 630; background: var(--surface-2); padding: 0.5rem; text-align: center;
+  }
+  .tpl-blank-name { font-family: var(--font-display, serif); font-size: 0.95rem; color: var(--mute); }
+  .tpl-meta { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.45rem 0.6rem; font-size: 0.8rem; }
+
+  .ws { margin-bottom: 1.8rem; padding: 1rem 1.2rem; }
+  .ws > .kicker { margin-bottom: 0.9rem; }
+  .ws-mini { color: var(--faint); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; margin: 0.9rem 0 0.45rem; }
+  .rev-card { margin: 0; max-width: 56rem; }
+  .rev-card img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+  .rev-card figcaption { display: flex; align-items: center; gap: 0.7rem; padding-top: 0.45rem; font-size: 0.78rem; flex-wrap: wrap; }
+
+  .schematic-wrap { max-width: 56rem; }
+  .schematic {
+    position: relative; border: 1px dashed var(--line); border-radius: var(--radius);
+    background: var(--surface-2); overflow: hidden;
+  }
+  .sch-cell { position: absolute; overflow: hidden; border: 1px solid var(--line); }
+  .sch-cell img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.9; }
+  .sch-cell i {
+    position: absolute; left: 0.35rem; bottom: 0.25rem; font-style: normal;
+    font-size: 0.68rem; background: color-mix(in srgb, var(--surface) 80%, transparent);
+    padding: 0.05rem 0.35rem; border-radius: 3px;
+  }
+  .sch-band {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 15%;
+    display: flex; align-items: center; justify-content: center;
+    background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 8px, var(--surface) 8px, var(--surface) 16px);
+    border-top: 1px dashed var(--line); color: var(--faint); font-size: 0.7rem;
+  }
+  .schematic-wrap > p { margin-top: 0.4rem; font-size: 0.74rem; }
+
+  .slot-row { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+  .slot-tile {
+    display: flex; flex-direction: column; gap: 0.25rem; width: 9.5rem;
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 0.4rem; background: var(--surface);
+  }
+  .slot-tile img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 4px; display: block; }
+  .slot-actions { display: flex; gap: 0.3rem; }
+
+  .words-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
+  .words-grid > * { min-width: 0; }
+  .render-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin-top: 0.4rem; }
+  .theme-chips { display: inline-flex; gap: 0.3rem; }
   .chip {
     display: inline-flex; align-items: center; gap: 0.35rem;
     border: 1px solid var(--line); border-radius: 999px; padding: 0.18rem 0.65rem;
     font-size: 0.8rem; color: var(--mute); text-decoration: none; background: var(--surface);
   }
   .chip.on { border-color: var(--red); color: var(--ink); background: var(--surface-2); }
-  .chip-img img { width: 1.7rem; height: 1.15rem; object-fit: cover; border-radius: 3px; display: block; }
-  .shot-chip { display: inline-flex; align-items: center; gap: 0.15rem; }
-  .shot-chip.hidden .chip { opacity: 0.45; }
-  .hide-form { display: inline; }
-  .eye { background: none; border: 0; color: var(--faint); font-size: 0.68rem; cursor: pointer; padding: 0.1rem 0.25rem; }
-  .eye:hover { color: var(--ink); }
-  .scope-note { color: var(--faint); font-size: 0.74rem; margin: 0.3rem 0 0; }
 
-  .pack-bar { display: flex; gap: 0.8rem; align-items: baseline; margin: 2rem 0 1rem; flex-wrap: wrap; font-size: 0.85rem; }
-  .pack-bar .faint { color: var(--faint); }
-  .lead { margin-bottom: 2rem; }
-  .lead .kicker { margin-bottom: 0.8rem; }
-  .lead-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; max-width: 64rem; }
-  .lead-card img { display: block; width: 100%; height: auto; }
-  .lead-card figcaption { display: flex; align-items: center; gap: 0.9rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
-  .lead-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  .fmt-chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
-  .recast-row { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.5rem; align-items: center; flex-wrap: wrap; }
-  .recast-row .chip { cursor: pointer; }
-  .revise-form { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.5rem; }
+  .revise-form { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.9rem; }
   .revise-form input[type=text] { flex: 1; font-size: 0.85rem; padding: 0.4rem 0.6rem; }
   .save-template { display: flex; gap: 0.4rem; width: 100%; margin-top: 0.3rem; }
   .save-template input[type=text] { font-size: 0.82rem; padding: 0.35rem 0.55rem; max-width: 22rem; }
 
-  .gallery { margin-bottom: 1.8rem; }
-  .gallery .kicker { margin-bottom: 0.8rem; }
-  .pv-grid { display: grid; gap: 0.9rem; }
-  .pv-grid > * { min-width: 0; }
-  .pv-layouts { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
-  .pv-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 0; }
-  .pv-card img { display: block; width: 100%; aspect-ratio: 1200 / 630; height: auto; object-fit: cover; background: var(--surface-2); }
-  .pv-card figcaption { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.7rem; font-size: 0.8rem; flex-wrap: wrap; }
-  .pv-card figcaption .use-form { margin-left: auto; }
-  .pv-loading img { opacity: 0.35; }
-  .pv-loading::after { content: 'rendering…'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
-  .pv-checking img { opacity: 0.75; }
-  .pv-checking::after { content: 'checking…'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
-  .pv-failed::after { content: 'preview unavailable — hover for why'; display: block; padding: 0 0.7rem 0.5rem; color: var(--faint); font-size: 0.72rem; }
+  #swap-dialog {
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+    color: inherit; max-width: min(58rem, 92vw); max-height: 84vh; padding: 1rem 1.2rem;
+  }
+  #swap-dialog::backdrop { background: rgba(10, 10, 12, 0.55); }
+  .swap-group { margin-top: 0.6rem; }
+  .swap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: 0.5rem; }
+  .swap-take {
+    display: flex; flex-direction: column; gap: 0.2rem; padding: 0.3rem;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+    cursor: pointer; text-align: left;
+  }
+  .swap-take:hover { border-color: var(--red); }
+  .swap-take img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 4px; display: block; }
+  .swap-close { margin-top: 0.9rem; }
 
-  .versions .kicker { margin-bottom: 0.8rem; }
-  .vgroups { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 0.9rem; }
-  .vgroups > * { min-width: 0; }
-  .design-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 0; }
-  .design-card img { display: block; width: 100%; height: auto; }
-  figcaption { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.7rem; font-size: 0.8rem; flex-wrap: wrap; }
+  .design-form { margin-bottom: 1.4rem; }
+  .inventory { color: var(--faint); font-size: 0.78rem; margin-bottom: 1rem; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
+  .form-grid > * { min-width: 0; }
   .faint { color: var(--faint); }
-  figcaption .btn { margin-left: auto; }
+  .foot-note { font-size: 0.78rem; }
 </style>

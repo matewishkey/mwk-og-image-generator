@@ -1,0 +1,272 @@
+---
+/**
+ * RESULTS (round 7): every rendered revision, grouped by render set — the
+ * browse/export screen, so the design page can stay an assembly bench.
+ * Filters live in the query string: ?template=<layoutId>&theme=dark&versions=all
+ * (versions=all includes designs whose template was archived).
+ */
+import Base from '../../../layouts/Base.astro';
+import Icon from '../../../components/Icon.astro';
+import { ENV } from '../../../lib/runtime';
+import { loadProject } from '../../../lib/data';
+import { ensurePackLink, renderAllFormats, rerenderDesign } from '../../../lib/design-actions';
+
+const env = ENV;
+const team = Astro.locals.team;
+const user = Astro.locals.user!;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+const bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+const project = bundle.project;
+
+const q = Astro.url.searchParams;
+const fTemplate = q.get('template');
+const fTheme = q.get('theme') === 'dark' ? 'dark' : q.get('theme') === 'light' ? 'light' : null;
+const showAll = q.get('versions') === 'all';
+const rUrl = (patch: Record<string, string | null>) => {
+  const p = new URLSearchParams(q);
+  for (const [k, v] of Object.entries(patch)) (v === null ? p.delete(k) : p.set(k, v));
+  const s = p.toString();
+  return `/projects/${slug}/results${s ? `?${s}` : ''}`;
+};
+
+const formats = await env.DB.prepare(`SELECT id, slug, name, width, height FROM format ORDER BY rowid`).all<{
+  id: string; slug: string; name: string; width: number; height: number;
+}>();
+
+const ctx = {
+  teamId: team.id,
+  userId: user.id,
+  project: {
+    id: project.id,
+    slug,
+    brand_kit_id: project.brand_kit_id,
+    title: project.title ?? null,
+    kicker: project.kicker ?? null,
+    tagline: project.tagline ?? null,
+  },
+};
+
+let error = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.getAll('action').at(-1) ?? '');
+  try {
+    if (action === 'all-formats') {
+      await renderAllFormats(env, ctx, String(form.get('design') ?? ''), formats.results);
+      return Astro.redirect(rUrl({}));
+    } else if (action === 'rerender') {
+      // Replays the design's own slots and words — refreshes the bytes in
+      // place (an identical replay supersedes its source).
+      await rerenderDesign(env, ctx, { designId: String(form.get('design') ?? '') });
+      return Astro.redirect(rUrl({}));
+    } else if (action === 'pack-link') {
+      await ensurePackLink(env, project.id);
+      return Astro.redirect(rUrl({}));
+    }
+    throw new Error('unknown action');
+  } catch (e) {
+    error = (e as Error).message;
+  }
+}
+
+interface Row {
+  id: string; collection_id: string | null; r2_key: string; thumb_key: string;
+  width: number; height: number; created_at: string; theme: string;
+  layout_id: string; layout_name: string; layout_archived: string | null;
+  format_slug: string; format_name: string;
+}
+const designs = await env.DB.prepare(
+  `SELECT d.id, d.collection_id, d.r2_key, d.thumb_key, d.width, d.height, d.created_at, d.theme,
+          l.id AS layout_id, l.name AS layout_name, l.archived_at AS layout_archived,
+          f.slug AS format_slug, f.name AS format_name
+     FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
+    WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
+      AND (l.archived_at IS NULL OR ?2)
+      AND (?3 IS NULL OR d.layout_id = ?3)
+      AND (?4 IS NULL OR d.theme = ?4)
+    ORDER BY d.created_at DESC`,
+)
+  .bind(project.id, showAll ? 1 : 0, fTemplate, fTheme)
+  .all<Row>();
+
+// One group per render set (collection), solos as themselves — newest first.
+const groups: { key: string; rows: Row[] }[] = [];
+{
+  const seen = new Set<string>();
+  for (const d of designs.results) {
+    const key = d.collection_id ?? `solo-${d.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    groups.push({
+      key,
+      rows: d.collection_id ? designs.results.filter((v) => v.collection_id === d.collection_id) : [d],
+    });
+  }
+}
+
+// The template filter chips: every template that has results here.
+const templateChips = [...new Map(designs.results.map((d) => [d.layout_id, d.layout_name])).entries()];
+const hasDark = designs.results.some((d) => d.theme === 'dark');
+const packToken = (project as unknown as { pack_token: string | null }).pack_token;
+---
+
+<Base title={`${project.name} · results`} nav="projects" project={{ slug, name: project.name, active: 'results' }}>
+  <div class="page-head">
+    <p class="kicker"><span class="g">/</span>{project.name}</p>
+    <h1>Results</h1>
+    <p class="sub">
+      Every rendered revision, newest first. Assemble new ones on
+      <a href={`/projects/${slug}/design`}>Design</a>; nothing here is ever lost —
+      superseded renders just step back.
+    </p>
+  </div>
+
+  {error && <p class="flash">{error}</p>}
+
+  {designs.results.length === 0 && !fTemplate && !fTheme ? (
+    <p class="sub">Nothing rendered yet — pick a template on <a href={`/projects/${slug}/design`}>Design</a> and hit Render.</p>
+  ) : (
+    <>
+      <section class="filters">
+        {templateChips.length > 1 && (
+          <span class="filter-row">
+            <span class="mono faint">template</span>
+            <a class:list={['chip', { on: !fTemplate }]} href={rUrl({ template: null })}>all</a>
+            {templateChips.map(([id, name]) => (
+              <a class:list={['chip', { on: fTemplate === id }]} href={rUrl({ template: id })}>{name}</a>
+            ))}
+          </span>
+        )}
+        {hasDark && (
+          <span class="filter-row">
+            <span class="mono faint">theme</span>
+            <a class:list={['chip', { on: !fTheme }]} href={rUrl({ theme: null })}>both</a>
+            <a class:list={['chip', { on: fTheme === 'light' }]} href={rUrl({ theme: 'light' })}>light</a>
+            <a class:list={['chip', { on: fTheme === 'dark' }]} href={rUrl({ theme: 'dark' })}>dark</a>
+          </span>
+        )}
+        <span class="filter-row">
+          {showAll ? (
+            <a class="chip" href={rUrl({ versions: null })}>hide archived-template renders</a>
+          ) : (
+            <a class="chip" href={rUrl({ versions: 'all' })}>show archived-template renders too</a>
+          )}
+        </span>
+      </section>
+
+      <div class="rgroups">
+        {groups.map((g) => {
+          const leadRow = g.rows.find((r) => r.format_slug === 'og') ?? g.rows[0]!;
+          return (
+            <figure class="rgroup">
+              <a href={`/img/${leadRow.r2_key}`} target="_blank">
+                <img src={`/img/${leadRow.thumb_key}`} alt={leadRow.layout_name} loading="lazy"
+                  onerror="this.closest('.rgroup')?.classList.add('bytes-gone')" />
+              </a>
+              <figcaption>
+                <span class="rg-head">
+                  <b>{leadRow.layout_name}</b>
+                  <span class="mono faint">
+                    {leadRow.theme === 'dark' ? 'dark · ' : ''}
+                    {g.rows.length === 1 ? `${leadRow.format_slug} · ${leadRow.width}×${leadRow.height}` : `${g.rows.length} formats`}
+                    {leadRow.layout_archived ? ' · template archived' : ''}
+                  </span>
+                </span>
+                {g.rows.length > 1 && (
+                  <span class="fmt-chips">
+                    {g.rows.map((d) => (
+                      <a class="chip" href={`/img/${d.r2_key}`} download={`${slug}-${d.format_slug}${d.theme === 'dark' ? '-dark' : ''}.png`}>
+                        {d.format_slug}
+                      </a>
+                    ))}
+                  </span>
+                )}
+                <span class="rg-actions">
+                  {g.rows.length === 1 && (
+                    <form method="post">
+                      <input type="hidden" name="action" value="all-formats" />
+                      <input type="hidden" name="design" value={leadRow.id} />
+                      <button class="btn small" type="submit" data-running="Rendering…">
+                        <Icon name="run" />All {formats.results.length} formats
+                      </button>
+                    </form>
+                  )}
+                  {g.rows.length > 1 && leadRow.collection_id ? (
+                    <a class="btn small" href={`/api/projects/${slug}/zip?collection=${leadRow.collection_id}`}>
+                      <Icon name="download" />zip
+                    </a>
+                  ) : (
+                    <a class="btn small ghost" href={`/img/${leadRow.r2_key}`} download={`${slug}-${leadRow.format_slug}.png`}>
+                      <Icon name="download" />PNG
+                    </a>
+                  )}
+                  <a class="btn small ghost" href={`/projects/${slug}/preview?design=${leadRow.id}`}>
+                    <Icon name="watch" />In context
+                  </a>
+                  {!leadRow.layout_archived && (
+                    <a class="btn small ghost" href={`/projects/${slug}/design?template=${leadRow.layout_id}&revision=${leadRow.id}`}>
+                      <Icon name="edit" />Open on Design
+                    </a>
+                  )}
+                  <form method="post" class="rerender-form">
+                    <input type="hidden" name="action" value="rerender" />
+                    <input type="hidden" name="design" value={leadRow.id} />
+                    <button class="btn small ghost" type="submit" data-running="Rendering…" title="replay this exact revision — refreshes the file">
+                      <Icon name="run" />Re-render
+                    </button>
+                  </form>
+                </span>
+              </figcaption>
+            </figure>
+          );
+        })}
+      </div>
+
+      <p class="pack-bar">
+        {packToken ? (
+          <>
+            <span class="kicker"><span class="g">/</span>Pack</span>
+            <a class="mono" href={`/pack/${packToken}`} target="_blank">
+              {`${env.PUBLIC_ORIGIN}/pack/${packToken.slice(0, 10)}…`}
+            </a>
+            <span class="faint">— the whole concept behind one link, for the social generator. Add .json for machines.</span>
+          </>
+        ) : (
+          <form method="post">
+            <input type="hidden" name="action" value="pack-link" />
+            <button class="btn small ghost" type="submit"><Icon name="pack" />Create pack link</button>
+          </form>
+        )}
+      </p>
+    </>
+  )}
+</Base>
+
+<style>
+  .filters { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.2rem; }
+  .filter-row { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+  .filter-row .mono.faint { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; min-width: 4.2rem; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    border: 1px solid var(--line); border-radius: 999px; padding: 0.18rem 0.65rem;
+    font-size: 0.8rem; color: var(--mute); text-decoration: none; background: var(--surface);
+  }
+  .chip.on { border-color: var(--red); color: var(--ink); background: var(--surface-2); }
+
+  .rgroups { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 0.9rem; }
+  .rgroups > * { min-width: 0; }
+  .rgroup { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 0; }
+  .rgroup img { display: block; width: 100%; height: auto; background: var(--surface-2); }
+  .rgroup figcaption { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.7rem; font-size: 0.8rem; }
+  .rg-head { display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; }
+  .fmt-chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+  .rg-actions { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+  .rg-actions form { display: inline; }
+  .bytes-gone img { opacity: 0.25; }
+  .bytes-gone::before { content: 'file missing from storage — Re-render brings it back'; display: block; padding: 0.4rem 0.7rem 0; color: var(--faint); font-size: 0.72rem; }
+  .faint { color: var(--faint); }
+  .pack-bar { display: flex; gap: 0.8rem; align-items: baseline; margin: 2rem 0 1rem; flex-wrap: wrap; font-size: 0.85rem; }
+</style>

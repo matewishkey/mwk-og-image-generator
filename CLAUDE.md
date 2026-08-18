@@ -123,12 +123,16 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   through it; the engine receives panels already in cell order and its baked schema
   copy strips the field. Never reintroduce `panels.slice(0, needed)` — positional
   slicing is why banner configs once needed 7 placeholder feeder cells to reach shot 8.
-- **The design page is scope-driven (round 6, the 3-reviewer usability pass):**
-  `?shot=<position>&style=<slug>&theme=dark` is the working scope — the scope IS the
-  shareable "package". Templates without explicit panel refs get the scoped shot LED
-  into their inventory; explicitly-wired templates filter instead (never re-cast).
-  Preview cache refs compose the scope (`<layoutId>@s-<style>@p-<shot>@t-dark`), so
-  scope flips switch caches instead of thrashing one row.
+- **Round 7: the design page is Template / Slots / Revisions** (mate's model, 2026-08-18).
+  URL state is `?template=<layoutId>&revision=<designId>&theme=dark`; old ?style/?shot
+  params are ignored and ?lead redirects into the new shape. STYLE plays no part on
+  the design page any more — pictures are chosen per SLOT (swap modal, takes grouped
+  by shot). A design row IS a revision: template + design_panel slot assignments +
+  words. `panels_hash` (0018) joins the supersede tuple with the words, so only an
+  IDENTICAL re-render supersedes; any change coexists as a new revision. Finished
+  renders live on `/projects/<slug>/results` (filters ?template/?theme/?versions=all,
+  zip, all-formats, re-render, pack bar); nav tabs are shots|design|results|settings
+  (/preview stays routable, highlights Results). Shot hide/unhide lives on /shots.
 - **`shot.hidden_at` (0017) hides a shot without deleting**: it KEEPS its inventory
   slot as null (resolvePanelTakes LEFT JOIN + scopeInventory in previews.ts), so
   `cell.panel` indexes never shift — a hidden shot fails loud ("cell N draws from a
@@ -139,15 +143,21 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   lead card** ("move the text left"), gpt-5.6-terra revises the layout config through the
   SAME validated-config loop as generate (brief carries the current config + instruction,
   n=1), the result lands as a new `rev-*` layout with the same name, the predecessor is
-  archived (team layouts only), and the design re-renders in place. This is the primary
-  editing path — the editor is for fine control, not the default.
-- **The editor carries the design page's scope** (`?shot/&style` on the editor link),
-  previews in the SAVE format's true aspect, starts in the source design's
-  format/theme/effect, and has drag-to-move handles over the live preview (freeform
-  cells/texts/shapes; `.le-stage` in app.css). preview-layout and authorTemplate both go
-  through resolvePanelTakes + scopeInventory + selectPanels — never positional picks.
-- **Re-rendering the same layout+format+theme+effect SUPERSEDES the old design row**
-  (createDesign/createCollection close each insert batch with the UPDATE). The design
+  archived (team layouts only), and the design re-renders — replaying the SOURCE
+  design's own panels when the cell count is unchanged (fallback: current resolution).
+  This is the primary editing path — the editor is for fine control, not the default.
+- **The editor** previews in the SAVE format's true aspect, starts in the source
+  design's format/theme/effect, and has drag-to-move handles over the live preview
+  (freeform cells/texts/shapes; `.le-stage` in app.css). preview-layout and
+  authorTemplate both go through resolvePanelTakes + scopeInventory + selectPanels —
+  never positional picks. The EFFECT select left the UI in round 7 (mate: confusing)
+  but `initialEffect` still THREADS through preview + save — supersede matches on
+  effect, so dropping the thread would double-card old grain/glow designs. Each text
+  row has an "+ accent line" button (appends a draggable redDeep `rule` shape).
+- **Supersede tuple (round 7): layout+format+theme+effect+panels_hash+words** — only a
+  byte-identical re-render retires its predecessor
+  (createDesign/createCollection close each insert batch with the UPDATE). Pre-0018
+  rows have NULL panels_hash and are never superseded again — accepted. The design
   page also hides designs whose LAYOUT is archived (`?versions=all` shows them) — so
   "clean up the design page" = archive dead layouts, never delete rows. NOTE
   `studio design --config` creates a NEW layout row per call, which defeats the
@@ -265,10 +275,10 @@ SHOWS real cards instead of asking for settings; the knobs live only in the edit
   exact engine payload (SHA-256); hash match = no render. The hash is IN the R2 key
   (`…/previews/<kind>-<ref>-<hash12>.png`) so /img's immutable cache header stays honest;
   the stale object is deleted on refresh. Composite renders are $0.00, engine `inline`.
-- **Per-style OG cards auto-render when a run settles** (events.ts run-finished, status
-  done → `refreshStylePreviews`, failures swallowed — never break the run callback). The
-  design page's inline script re-asks POST /api/…/previews per card (3 concurrent);
-  fresh answers are instant.
+- **NOTHING auto-renders since round 7** — refreshStylePreviews is deleted, the
+  design page's preview pump is gone, and run-finished only does bookkeeping.
+  Previews render on intent only (`/api/…/previews` and `ensurePreview` stay for
+  callers that ask). Don't reintroduce a background sweep.
 - **Panels = pick ?? newest succeeded** (`resolvePanelTakes`, optional style scope) —
   designs and previews work from DRAFTS; picking upgrades, never gates. NOTE the SQL
   shape: SQLite refuses an outer-alias reference in the ORDER BY of an ON-clause
@@ -278,9 +288,16 @@ SHOWS real cards instead of asking for settings; the knobs live only in the edit
   layouts stay out (their designs are in versions history); 70 near-identical cards was
   the exact confusion the gallery exists to kill. Every card shows "N images".
 - **Design actions live in `lib/design-actions.ts`** (render-from-layout, all-formats,
-  generate, save-template, author, pack-link); design.astro's POST and
-  /api/…/designs are thin wrappers — change behaviour in the lib, never in a route.
-  The designs API also accepts `{ layoutId, formatIds?, themes?, effect? }` now.
+  generate, save-template, author, pack-link, and since round 7: panelsFromDesign /
+  rerenderDesign / setPanel); design.astro's POST and /api/…/designs are thin
+  wrappers — change behaviour in the lib, never in a route. The designs API also
+  accepts `{ layoutId, formatIds?, themes?, effect? }`.
+- **The replay path (round 7)**: `panelsFromDesign` reads a design's OWN design_panel
+  rows; `rerenderDesign` re-renders from them with `preselected: true`, which SKIPS
+  selectPanels (design_panel stores the POST-selectPanels flattened list — re-selecting
+  would misread `cell.panel` refs as inventory indexes). `preselected` rides ONLY
+  replay paths, never resolve paths. renderAllFormats replays too — a promoted design
+  keeps its exact pictures, never re-resolved from current picks.
 - **`updateProject` in lib/projects.ts is the ONE settings writer** — settings page,
   PATCH /api/projects/[slug], and `studio set` all call it. The brand-kit selector
   (settings + design page, changes project.brand_kit_id) rides it; kit change → new

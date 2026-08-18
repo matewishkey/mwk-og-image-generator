@@ -11,7 +11,7 @@ interface Props {
   project?: {
     slug: string;
     name: string;
-    active: 'shots' | 'design' | 'preview' | 'settings';
+    active: 'shots' | 'design' | 'results' | 'settings';
   };
 }
 const { title, nav, project } = Astro.props;
@@ -30,7 +30,7 @@ const NAV = [
 const PROJECT_TABS = [
   { id: 'shots', label: 'Shots & takes' },
   { id: 'design', label: 'Design' },
-  { id: 'preview', label: 'Preview' },
+  { id: 'results', label: 'Results' },
   { id: 'settings', label: 'Settings' },
 ] as const;
 ---

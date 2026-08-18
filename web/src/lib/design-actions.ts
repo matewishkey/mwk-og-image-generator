@@ -11,7 +11,7 @@
 import { layoutPanels, LayoutConfigSchema, type LayoutConfig } from '../../../src/seam.ts';
 import { isEffect } from '../../../src/effects.ts';
 import { slugify } from '../../../src/style.ts';
-import { createCollection, createDesign, type FormatRow } from './design';
+import { createCollection, createDesign, type FormatRow, type PanelInput } from './design';
 import { generateLayouts } from './generate';
 import { resolvePanelTakes, scopeInventory } from './previews';
 import { ulid } from './ulid';
@@ -137,7 +137,103 @@ export async function renderFromLayout(
   return first ?? '';
 }
 
-/** Promote one design to every format — same layout, same words, one collection. */
+/**
+ * A design's OWN slot assignments, replayed from its design_panel rows —
+ * position-ordered, one entry per cell, exactly what the renderer received.
+ * Takes and references are immutable, so this reconstructs any design
+ * byte-for-byte. Feed the result to createDesign with `preselected: true`.
+ */
+export async function panelsFromDesign(env: Env, designId: string): Promise<PanelInput[]> {
+  const rows = await env.DB.prepare(
+    `SELECT p.label, p.take_id, p.reference_id, coalesce(t.art_key, r.r2_key) AS art_key
+       FROM design_panel p
+       LEFT JOIN take t ON t.id = p.take_id
+       LEFT JOIN reference r ON r.id = p.reference_id
+      WHERE p.design_id = ?1
+      ORDER BY p.position`,
+  )
+    .bind(designId)
+    .all<{ label: string | null; take_id: string | null; reference_id: string | null; art_key: string | null }>();
+  return rows.results
+    .filter((r) => r.art_key)
+    .map((r) => ({
+      takeId: r.take_id ?? undefined,
+      referenceId: r.reference_id ?? undefined,
+      artKey: r.art_key!,
+      label: r.label ?? undefined,
+    }));
+}
+
+export interface RerenderOverrides {
+  /** Full replacement slot list (cell order) — setPanel builds this. */
+  panels?: PanelInput[];
+  title?: string;
+  kicker?: string;
+  tagline?: string;
+  theme?: 'light' | 'dark';
+  formatId?: string;
+}
+
+/**
+ * THE replay path: re-render a design from its own stored slots and words,
+ * with optional overrides. Identical replay supersedes the source (same
+ * supersede tuple); any override lands as a coexisting revision.
+ */
+export async function rerenderDesign(
+  env: Env,
+  ctx: DesignCtx,
+  o: { designId: string; overrides?: RerenderOverrides },
+): Promise<string> {
+  const src = await env.DB.prepare(
+    `SELECT layout_id, format_id, theme, effect, title, kicker, tagline FROM design
+      WHERE id = ?1 AND team_id = ?2 AND project_id = ?3`,
+  )
+    .bind(o.designId, ctx.teamId, ctx.project.id)
+    .first<{ layout_id: string; format_id: string; theme: string; effect: string | null;
+             title: string | null; kicker: string | null; tagline: string | null }>();
+  if (!src) throw new Error('no such design');
+  const ov = o.overrides ?? {};
+  const panels = ov.panels ?? (await panelsFromDesign(env, o.designId));
+  if (!panels.length) throw new Error('this design has no stored slot assignments to replay');
+  return createDesign(env, {
+    teamId: ctx.teamId,
+    userId: ctx.userId,
+    projectId: ctx.project.id,
+    layoutId: src.layout_id,
+    formatId: ov.formatId ?? src.format_id,
+    brandKitId: ctx.project.brand_kit_id,
+    title: ov.title !== undefined ? ov.title.trim() || undefined : src.title ?? undefined,
+    kicker: ov.kicker !== undefined ? ov.kicker.trim() || undefined : src.kicker ?? undefined,
+    tagline: ov.tagline !== undefined ? ov.tagline.trim() || undefined : src.tagline ?? undefined,
+    theme: ov.theme ?? (src.theme === 'dark' ? 'dark' : 'light'),
+    effect: src.effect ?? undefined,
+    panels,
+    preselected: true,
+  });
+}
+
+/** Swap ONE slot's picture for another take; every other slot replays as-is. */
+export async function setPanel(
+  env: Env,
+  ctx: DesignCtx,
+  o: { designId: string; position: number; takeId: string },
+): Promise<string> {
+  const take = await env.DB.prepare(
+    `SELECT t.id, t.art_key, sh.label FROM take t JOIN shot sh ON sh.id = t.shot_id
+      WHERE t.id = ?1 AND sh.project_id = ?2 AND t.status = 'succeeded' AND t.art_key IS NOT NULL`,
+  )
+    .bind(o.takeId, ctx.project.id)
+    .first<{ id: string; art_key: string; label: string | null }>();
+  if (!take) throw new Error('that take is not usable (missing, failed, or another project)');
+  const panels = await panelsFromDesign(env, o.designId);
+  if (o.position < 1 || o.position > panels.length)
+    throw new Error(`slot ${o.position} does not exist — this design has ${panels.length}`);
+  panels[o.position - 1] = { takeId: take.id, artKey: take.art_key, label: take.label ?? undefined };
+  return rerenderDesign(env, ctx, { designId: o.designId, overrides: { panels } });
+}
+
+/** Promote one design to every format — same layout, same words, and the
+ *  design's OWN pictures (replayed, never re-resolved from current picks). */
 export async function renderAllFormats(
   env: Env,
   ctx: DesignCtx,
@@ -152,7 +248,8 @@ export async function renderAllFormats(
     .first<{ layout_id: string; title: string | null; kicker: string | null;
              tagline: string | null; theme: string; effect: string | null }>();
   if (!src) throw new Error('no such design');
-  const panels = await scopedProjectPanels(env, ctx.project.id, await layoutConfigOf(env, src.layout_id));
+  const panels = await panelsFromDesign(env, designId);
+  if (!panels.length) throw new Error('this design has no stored slot assignments to replay');
   const collectionId = ulid();
   await env.DB.prepare(
     `INSERT INTO collection (id, team_id, project_id, name, created_by, created_at)
@@ -174,6 +271,7 @@ export async function renderAllFormats(
     collectionId,
     formats,
     panels,
+    preselected: true,
   });
 }
 
@@ -384,8 +482,6 @@ export async function recastDesign(
 export interface ReviseOpts {
   designId: string;
   instruction: string;
-  styleId?: string;
-  shotPosition?: number;
 }
 
 /**
@@ -468,6 +564,12 @@ export async function reviseDesign(
   const next = revised[0];
   if (!next) throw new Error('the model could not produce a valid revision — try wording the change differently');
 
+  // Replay the source design's OWN pictures whenever the revised config still
+  // has the same number of cells; only a cell-count change falls back to the
+  // project's current resolution (there is no stored answer for a new slot).
+  const srcPanels = await panelsFromDesign(env, o.designId);
+  const sameCells = srcPanels.length > 0 && layoutPanels(next.config) === srcPanels.length;
+
   const nowIso = new Date().toISOString();
   const layoutId = ulid();
   const stmts = [
@@ -485,10 +587,7 @@ export async function reviseDesign(
   }
   await env.DB.batch(stmts);
 
-  const panels = await scopedProjectPanels(env, ctx.project.id, next.config, {
-    styleId: o.styleId,
-    shotPosition: o.shotPosition,
-  });
+  const panels = sameCells ? srcPanels : await scopedProjectPanels(env, ctx.project.id, next.config);
   return createDesign(env, {
     teamId: ctx.teamId,
     userId: ctx.userId,
@@ -502,6 +601,7 @@ export async function reviseDesign(
     theme: src.theme === 'dark' ? 'dark' : 'light',
     effect: src.effect ?? undefined,
     panels,
+    preselected: sameCells,
   });
 }
 

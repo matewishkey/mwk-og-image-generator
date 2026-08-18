@@ -9,7 +9,6 @@ import { ENV } from '../../../../lib/runtime';
 import { loadProject } from '../../../../lib/data';
 import { consumedPanels, LayoutConfigSchema } from '../../../../../../src/seam.ts';
 import { resolvePanelTakes } from '../../../../lib/previews';
-import { EFFECTS } from '../../../../../../src/effects.ts';
 
 const env = ENV;
 const team = Astro.locals.team;
@@ -75,7 +74,6 @@ const initial = {
   slug,
   layouts: usable,
   formats: formats.results,
-  effects: EFFECTS.map((e) => ({ slug: e.slug, label: e.label })),
   defaults: {
     title: bundle.project.title ?? '',
     kicker: bundle.project.kicker ?? '',

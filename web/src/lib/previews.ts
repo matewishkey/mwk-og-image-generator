@@ -3,9 +3,11 @@
  * actual pictures, so nobody has to imagine what a layout or a style would
  * look like. Two kinds:
  *
- *   'layout' — one card per usable layout (the design page gallery)
- *   'style'  — one OG card per project style (auto-refreshed when a run
- *              settles, so they are waiting when you arrive)
+ *   'layout' — a layout rendered with the project's pictures
+ *   'style'  — one OG card per project style
+ *
+ * Previews render ON INTENT only (a page or API asks for one) — never as a
+ * background sweep on run-finish or page load (round 7).
  *
  * A preview is a cache, not history. The input hash is the SHA-256 of the
  * exact engine payload, so any change to picks, kit, words, theme or layout
@@ -221,42 +223,4 @@ export async function stylePreviewLayout(
     if (!best || n < best.panels) best = { id: c.id, config: parsed.data, panels: n };
   }
   return best ? { id: best.id, config: best.config } : null;
-}
-
-/**
- * Refresh the per-style OG previews (used by the events hook when a run
- * settles, and lazily by the design page). Failures are collected, never
- * thrown — a broken preview must not break a run callback.
- */
-export async function refreshStylePreviews(
-  env: Env,
-  teamId: string,
-  project: ProjectRow,
-): Promise<string[]> {
-  const errors: string[] = [];
-  const styles = await env.DB.prepare(
-    `SELECT s.id, s.slug FROM project_style ps JOIN style s ON s.id = ps.style_id
-      WHERE ps.project_id = ?1 ORDER BY ps.position`,
-  )
-    .bind(project.id)
-    .all<{ id: string; slug: string }>();
-  for (const s of styles.results) {
-    try {
-      const panels = await resolvePanelTakes(env, project.id, s.id);
-      if (!panels.length) continue;
-      const layout = await stylePreviewLayout(env, teamId, project.id, panels.length);
-      if (!layout) continue;
-      await ensurePreview(env, {
-        teamId,
-        project,
-        kind: 'style',
-        refId: s.id,
-        layoutConfig: layout.config,
-        styleId: s.id,
-      });
-    } catch (e) {
-      errors.push(`${s.slug}: ${(e as Error).message}`);
-    }
-  }
-  return errors;
 }

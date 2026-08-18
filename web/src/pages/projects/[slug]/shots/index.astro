@@ -4,6 +4,7 @@
  * lives at /shots/<position>. Project-level refs + run-all live here.
  */
 import Base from '../../../../layouts/Base.astro';
+import Icon from '../../../../components/Icon.astro';
 import Overview from '../../../../components/ws/Overview';
 import { ENV } from '../../../../lib/runtime';
 import { loadProject } from '../../../../lib/data';
@@ -11,6 +12,7 @@ import { estimateMicros, loadProjectRefs } from '../../../../lib/runs';
 import { listStyles } from '../../../../lib/styles';
 import { refState } from '../../../../lib/media';
 import { takesPayload } from '../../../../lib/workspace';
+import { resolvePanelTakes } from '../../../../lib/previews';
 import { sweepLeases } from '../../../../lib/sweep';
 import { MODELS } from '../../../../../../src/models.ts';
 
@@ -22,6 +24,24 @@ const slug = Astro.params.slug!;
 await sweepLeases(env);
 const bundle = await loadProject(env, team.id, slug);
 if (!bundle) return new Response('Not found', { status: 404 });
+
+// Hide/unhide a shot from the DESIGN inventory (takes and history stay; the
+// slot goes null so template panel indexes never shift). Lives here since
+// round 7 — visibility is a shots concern, not a design-page concern.
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.getAll('action').at(-1) ?? '');
+  if (action === 'hide-shot' || action === 'unhide-shot') {
+    await env.DB.prepare(
+      `UPDATE shot SET hidden_at = ?1 WHERE project_id = ?2 AND position = ?3 AND deleted_at IS NULL`,
+    )
+      .bind(action === 'hide-shot' ? new Date().toISOString() : null, bundle.project.id, Number(form.get('position')))
+      .run();
+  }
+  return Astro.redirect(`/projects/${slug}/shots`);
+}
+
+const panelSlots = await resolvePanelTakes(env, bundle.project.id);
 
 const models: string[] = JSON.parse(bundle.project.models);
 const [styleRows, takes, refs, refInfo] = await Promise.all([
@@ -64,4 +84,41 @@ const styleNames = bundle.styles.map((s) => s.name).join(', ');
   </div>
 
   <Overview client:load initial={initial} />
+
+  {panelSlots.length > 0 && (
+    <section class="feed-strip card">
+      <p class="kicker"><span class="g">/</span>Feeding designs — hide a shot to keep it out of templates without deleting anything</p>
+      <div class="feed-row">
+        {panelSlots.map((p) => (
+          <span class:list={['feed-chip', { off: !!p.hidden }]}>
+            {p.art_thumb_key && <img src={`/img/${p.art_thumb_key}`} alt="" loading="lazy" />}
+            <span>{p.label ?? `shot ${p.position}`}</span>
+            <form method="post">
+              <input type="hidden" name="action" value={p.hidden ? 'unhide-shot' : 'hide-shot'} />
+              <input type="hidden" name="position" value={p.position} />
+              <button class="eye" type="submit">
+                <Icon name={p.hidden ? 'watch' : 'hide'} />{p.hidden ? 'unhide' : 'hide'}
+              </button>
+            </form>
+          </span>
+        ))}
+      </div>
+    </section>
+  )}
 </Base>
+
+<style>
+  .feed-strip { margin-top: 1.6rem; padding: 0.9rem 1.1rem; }
+  .feed-strip .kicker { margin-bottom: 0.7rem; }
+  .feed-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  .feed-chip {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    border: 1px solid var(--line); border-radius: 999px; padding: 0.2rem 0.6rem 0.2rem 0.3rem;
+    font-size: 0.8rem; background: var(--surface);
+  }
+  .feed-chip img { width: 1.9rem; height: 1.25rem; object-fit: cover; border-radius: 999px 3px 3px 999px; display: block; }
+  .feed-chip.off { opacity: 0.45; }
+  .feed-chip form { display: inline; }
+  .eye { background: none; border: 0; color: var(--faint); font-size: 0.7rem; cursor: pointer; padding: 0.1rem 0.2rem; display: inline-flex; gap: 0.2rem; align-items: center; }
+  .eye:hover { color: var(--ink); }
+</style>
