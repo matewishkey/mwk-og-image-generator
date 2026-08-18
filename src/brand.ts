@@ -85,9 +85,27 @@ export async function textLayer(opts: {
   trackingEm?: number;
   /** When set, *asterisked* runs render in this colour. */
   accent?: string;
+  /** Underline variant; colours are resolved hex (tokens resolve caller-side). */
+  underline?: 'single' | 'low';
+  underlineColor?: string;
+  /** Background highlight. Changes the trimmed geometry — callers opt in. */
+  highlight?: string;
+  /** 0-1; pango wants 1-65536. */
+  highlightAlpha?: number;
+  strike?: boolean;
 }): Promise<{ buf: Buffer; width: number; height: number }> {
   const tracking = opts.trackingEm ? Math.round(opts.trackingEm * opts.font.size * 1024) : 0;
-  const attrs = [`weight="${opts.font.weight}"`, tracking ? `letter_spacing="${tracking}"` : '']
+  const attrs = [
+    `weight="${opts.font.weight}"`,
+    tracking ? `letter_spacing="${tracking}"` : '',
+    opts.underline ? `underline="${opts.underline}"` : '',
+    opts.underline && opts.underlineColor ? `underline_color="${opts.underlineColor}"` : '',
+    opts.highlight ? `background="${opts.highlight}"` : '',
+    opts.highlight && opts.highlightAlpha != null
+      ? `background_alpha="${Math.max(1, Math.round(opts.highlightAlpha * 65535))}"`
+      : '',
+    opts.strike ? 'strikethrough="true"' : '',
+  ]
     .filter(Boolean)
     .join(' ');
 

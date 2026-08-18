@@ -305,6 +305,31 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
                       {TOKENS.map((k) => <option value={k}>{k}</option>)}
                     </select>
                   </label>
+                  <label class="le-num"><span>underline</span>
+                    <select value={str(t.underline, '')} onChange={(e) => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      patchItem('texts', i, { underline: v || undefined });
+                    }}>
+                      <option value="">none</option>
+                      <option value="accent">accent (kit red)</option>
+                      <option value="single">single</option>
+                      <option value="low">low</option>
+                    </select>
+                  </label>
+                  <label class="le-num"><span>highlight</span>
+                    <select value={str(t.highlight, '')} onChange={(e) => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      patchItem('texts', i, { highlight: v || undefined, highlightAlpha: v ? num(t.highlightAlpha, 1) : undefined });
+                    }}>
+                      <option value="">none</option>
+                      {TOKENS.map((k) => <option value={k}>{k}</option>)}
+                    </select>
+                  </label>
+                  <label class="le-num inline">
+                    <input type="checkbox" checked={!!t.strike}
+                      onChange={(ev) => patchItem('texts', i, { strike: (ev.target as HTMLInputElement).checked || undefined })} />
+                    <span>strike</span>
+                  </label>
                   {(cfg.shapes?.length ?? 0) < 8 && (
                     <button type="button" class="linkish"
                       title="add a short accent rule under this text — drag it after"

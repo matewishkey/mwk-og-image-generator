@@ -136,6 +136,16 @@ export const TextSpecSchema = z.object({
   accentColor: ColorTokenSchema.optional(),
   case: z.enum(['upper', 'none']).default('none'),
   trackingEm: z.number().min(0).max(1).optional(),
+  /** Text decoration (round 7) — attribute-level pango effects, all optional so
+   *  every stored template renders byte-identical. 'accent' is a single
+   *  underline in underlineColor ?? redDeep (the hover-line look). */
+  underline: z.enum(['single', 'accent', 'low']).optional(),
+  underlineColor: ColorTokenSchema.optional(),
+  /** Background highlight behind the glyphs. NOTE: pango's background changes
+   *  the trimmed buffer's geometry, so this is opt-in per text, never a default. */
+  highlight: ColorTokenSchema.optional(),
+  highlightAlpha: z.number().min(0).max(1).optional(),
+  strike: z.boolean().optional(),
   z: z.number().int().min(0).max(100).default(60),
 });
 export type TextSpec = z.infer<typeof TextSpecSchema>;

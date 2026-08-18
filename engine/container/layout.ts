@@ -326,6 +326,16 @@ async function renderTexts(
       accent: brand.colors[t.accentColor ?? 'redDeep'],
       trackingEm: t.trackingEm ?? (t.font === 'kicker' ? brand.kicker.trackingEm : undefined),
       width: Math.max(20, Math.round(t.w * W)),
+      // 'accent' = single underline in the kit's accent (redDeep) by default.
+      underline: t.underline ? (t.underline === 'accent' ? 'single' : t.underline) : undefined,
+      underlineColor: t.underlineColor
+        ? brand.colors[t.underlineColor]
+        : t.underline === 'accent'
+          ? brand.colors.redDeep
+          : undefined,
+      highlight: t.highlight ? brand.colors[t.highlight] : undefined,
+      highlightAlpha: t.highlightAlpha,
+      strike: t.strike,
     });
     const boxW = Math.round(t.w * W);
     const left =

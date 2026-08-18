@@ -133,6 +133,14 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   renders live on `/projects/<slug>/results` (filters ?template/?theme/?versions=all,
   zip, all-formats, re-render, pack bar); nav tabs are shots|design|results|settings
   (/preview stays routable, highlights Results). Shot hide/unhide lives on /shots.
+- **Text decoration (round 7 phase 2)**: TextSpec grew `underline` ('single'|'accent'|
+  'low' — 'accent' = single underline in underlineColor ?? redDeep), `underlineColor`,
+  `highlight` (+`highlightAlpha`, pango background — changes trimmed geometry, opt-in
+  only), `strike`. All optional; the band renders byte-identical (proved by a 0-pixel
+  diff across the engine upgrade). Emitted as pango attrs in brand.ts textLayer,
+  resolved to hex engine-side in renderTexts. NO italic/condensed — pango re-resolves
+  the face and silently falls back to DejaVu. The editor has the controls per text row;
+  the generate brief documents the fields so "Change it" can use them.
 - **`shot.hidden_at` (0017) hides a shot without deleting**: it KEEPS its inventory
   slot as null (resolvePanelTakes LEFT JOIN + scopeInventory in previews.ts), so
   `cell.panel` indexes never shift — a hidden shot fails loud ("cell N draws from a
@@ -364,7 +372,11 @@ lib/runs.ts) — change behaviour there, not in the routes.
   (main-7, 2026-08-16: "Image already exists remotely, skipping push" while the app kept the
   old digest, and the fresh instance ran old code). If the digest only changes on a second
   deploy, bump INSTANCE_NAME again — an instance that started before the digest changed
-  keeps serving the old image.
+  keeps serving the old image. Even when the FIRST deploy shows a new digest, verify with
+  a real render that new behaviour is live (main-11, 2026-08-18: fresh digest applied yet
+  the instance booted the old image and its baked zod stripped the new schema fields; an
+  INSTANCE_NAME re-bump fixed it — and "Image already exists remotely, skipping push" on
+  that second deploy is fine, it proves the remote image already matches the local build).
 - **After every deploy**: `cd web && TOKEN=<fresh login token> node tests/smoke.mjs` — a real
   Chromium pass against the live site. Mint the token by inserting a `login_token` row (SHA-256 of
   the token) via `wrangler d1 execute`.

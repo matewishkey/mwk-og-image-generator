@@ -90,7 +90,9 @@ minus a reserved bottom band when lockup is "bottom"); texts and shapes map to t
   "texts":  [{ "content": "literal string" | {"role":"projectTitle"|"projectKicker"|"projectTagline"},
                "font":"title"|"kicker"|"tagline", "x":0.06, "y":0.1, "w":0.5,
                "align":"left"|"center"|"right", "sizeScale":0.3-4, "color":"ink",
-               "accentColor":"redDeep", "case":"upper"|"none", "z":60 }],
+               "accentColor":"redDeep", "case":"upper"|"none",
+               "underline":"accent"|"single"|"low", "underlineColor":<token>,
+               "highlight":<token>, "highlightAlpha":0-1, "strike":true, "z":60 }],
   "shapes": [{ "kind":"rect"|"rule"|"gradient", "x":0, "y":0.9, "w":1, "h":0.1,
                "color":"red", "opacity":0.9, "angle":0, "z":40 }],
   "background": "paper",
@@ -106,7 +108,9 @@ in the lockup.
 
 Z ORDER: cells default 0, shapes 40, texts 60; the lockup always renders last. A cell's
 feather fades inside its own rect on the listed edges — use it where cells overlap.
-Text "y" is the ink top of the line. Craft guardrails: at most 2 extra text layers beyond a
+Text "y" is the ink top of the line. Decoration: "underline":"accent" draws the hover-line
+look (single underline in the kit accent) — good on one word or a short title; "highlight"
+paints a marker block behind the glyphs (use a quiet token + highlightAlpha ~0.35, sparingly). Craft guardrails: at most 2 extra text layers beyond a
 role-bound title; freeform cards may use lockup "none" with a role-bound projectTitle text
 instead. NEVER propose more cells than the inventory has images.
 
