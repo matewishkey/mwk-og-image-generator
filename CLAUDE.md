@@ -348,6 +348,36 @@ SHOWS real cards instead of asking for settings; the knobs live only in the edit
   web-side; the engine knows nothing about it.
 - Per-shot `ref_role` (0010) overrides the project's, via `SeamIdea.refRole`.
 
+## Round 8: chat-first — the decisions a reviewer panel settled (2026-08-19)
+
+Six reviewers (3 research, 3 critique) + mate's answers fixed these; don't relitigate:
+
+- **Artifacts as a viz layer: rejected on physics** (viewer sandbox blocks downloads,
+  16MB data-URI cap, republish-per-poll). The CF site stays the eyes; chat is the hands.
+- **Local generation ships as DIRECT-INGEST (8b), not a pull queue**: createRun gains a
+  return-the-payload mode, `studio run` executes inline via an executor extracted from
+  engine/container/server.ts. No daemon, no claim endpoint. Site buttons keep the engine.
+- **Take ordinals are permanent**: `<shot>.<n>` by (created_at, id) over ALL of a shot's
+  takes — computed identically in workspace.ts (JS) and zip/run-page SQL (ROW_NUMBER).
+  Printed on every tile (`.ws-ordinal`), the lightbox, `studio takes`, and watch lines;
+  every CLI take arg accepts `1.3` tokens (resolved client-side in studio.ts). Never
+  renumber, never reuse — a spoken number must stay valid forever.
+- **`/projects/<slug>/runs/<runId>`** is the one-page run contact sheet (shots × styles,
+  live-refreshing); run/reshoot/reroll print it the moment the run exists — the deep
+  link comes FIRST, not at the end.
+- **`studio upload-ref` / `studio zip --takes 1.3,… [--out f]`** close the chat loop:
+  refs in and multi-file downloads out without touching the site. Zip take entries are
+  ordinal-named, raw art + branded card each.
+- **Cell events renew the whole run's take leases** (events.ts) — a >30-min gpt2 sweep
+  no longer gets its tail swept as abandoned. And every Replicate prediction carries
+  `Cancel-After: 15m` (format verified 2026-08-19: integer seconds or 30s/5m/2h, 5s–24h)
+  so a dead process can't bill unattended.
+- **`.claude/skills/mwk-media/`** is the operator playbook + the SINGLE source of recipe
+  definitions (recipes.md); the 8c guide page must read that file, never copy it.
+- Typography (8c) stays sharp+pango — satori rejected (no kerning/ligatures, broken
+  variable fonts). Shadow = recolored+blurred duplicate layer; outline = ring composite.
+- Full history: ~/.claude/plans/pls-use-3-reviewer-lazy-dream.md.
+
 ## The studio CLI — how Claude drives the site
 
 `mwk-og studio …` (`src/studio.ts`) operates the LIVE studio over `/api/*` JSON routes so

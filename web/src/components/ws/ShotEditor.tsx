@@ -505,6 +505,7 @@ export default function ShotEditor({ initial }: { initial: EditorInitial }) {
                     </div>
                   )}
                   <figcaption>
+                    <span class="mono ws-ordinal">{shot.position}.{t.ordinal}</span>
                     <span class="mono">{t.model_alias}</span>
                     {multiStyle && <span class="ws-take-style">{styleName(t.style_id)}</span>}
                     <span class="mono faint">#{t.iteration}</span>
@@ -540,6 +541,7 @@ export default function ShotEditor({ initial }: { initial: EditorInitial }) {
                       <img src={`/img/${t.art_thumb_key ?? t.thumb_key}`} alt="" loading="lazy" width={640} height={360} />
                     )}
                     <figcaption>
+                      <span class="mono ws-ordinal">{shot.position}.{t.ordinal}</span>
                       <span class="mono">{t.model_alias}</span>
                       <button class="btn small ghost" onClick={() => takeAction(t.id, 'unhide')}><I name="watch" />Unhide</button>
                     </figcaption>
@@ -553,7 +555,7 @@ export default function ShotEditor({ initial }: { initial: EditorInitial }) {
 
       {/* take lightbox: the RAW picture big; the branded card is one click away */}
       <Modal open={!!lightbox} onClose={() => setLightbox(null)} wide
-        title={lightbox ? `${lightbox.model_alias} · #${lightbox.iteration}${multiStyle ? ` · ${styleName(lightbox.style_id)}` : ''}` : ''}>
+        title={lightbox ? `${shot.position}.${lightbox.ordinal} · ${lightbox.model_alias} · #${lightbox.iteration}${multiStyle ? ` · ${styleName(lightbox.style_id)}` : ''}` : ''}>
         {lightbox && (
           <div class="ws-lightbox">
             <img src={`/img/${lightbox.art_key ?? lightbox.card_key}`} alt="take" />

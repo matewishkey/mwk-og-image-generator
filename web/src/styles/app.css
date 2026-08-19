@@ -361,6 +361,9 @@ svg.i { width: 1em; height: 1em; flex: none; vertical-align: -0.125em; }
 .ws-shot { margin-bottom: 1.2rem; }
 .ws-shot-head { display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap; }
 .ws-pos { color: var(--faint); font-weight: 700; }
+/* The speakable take number ("1.3") — printed on the card so chat and browser
+   share one vocabulary. Never renumbered. */
+.ws-ordinal { color: var(--red-deep); font-weight: 700; }
 .ws-right { margin-left: auto; }
 .ws-fields { margin-top: 0.9rem; }
 .ws-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }

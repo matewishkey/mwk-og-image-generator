@@ -29,6 +29,9 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
   reshoot <slug> <shot>        new takes of one shot with current settings; --watch
   delete-shot <slug> <shot>    soft-delete a shot
   refs                         the media library, with names
+  upload-ref <file…>           upload image(s) into the library (content-deduped)
+  zip <slug> --takes 1.3,…     one zip of hand-picked takes (raw art + branded card each)
+                               or --designs <id,…>; --out <file> downloads it here
   name-ref <refId> <name>      name an image so we can talk about it
   attach <slug> <refId>        attach a library image to every shot; --shot <id|position> scopes it
   detach <slug> <refId>        remove that attachment; --shot scopes it the same way
@@ -36,10 +39,11 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
   run <slug>                   start a full run (project settings pick models); --watch to follow
   watch <slug>                 follow take status until the run settles; --interval <s> (default 5)
   takes <slug>                 the contact sheet as a table; --all includes hidden + superseded
-  pick <slug> <takeId>         pick a succeeded take for its shot
-  reroll <slug> <takeId>       new take of the same shot+model; --watch
-  hide <slug> <takeId>         hide a take (reversible: unhide)
-  unhide <slug> <takeId>
+  pick <slug> <take>           pick a succeeded take for its shot. Every <take> accepts the
+                               speakable number from the tiles ("1.3" = shot 1, take 3) or a raw id
+  reroll <slug> <take>         new take of the same shot+model; --watch
+  hide <slug> <take>           hide a take (reversible: unhide)
+  unhide <slug> <take>
   design <slug> --config <file.json>   render a hand-authored template (cells/texts/shapes,
                                colors as brand tokens); --name, --format <formatId>, --title/--kicker/--tagline
   quick --image <file> --template <id|slug>   image in, branded card out — no project, no shots.
@@ -93,6 +97,7 @@ const money = (usd: number): string => `$${usd.toFixed(4)}`;
 interface TakeInfo {
   id: string;
   shot_id: string;
+  ordinal: number;
   model_alias: string;
   iteration: number;
   status: string;
@@ -119,6 +124,19 @@ interface TakesResponse {
 function shotName(shots: ShotInfo[], shotId: string): string {
   const s = shots.find((x) => x.id === shotId);
   return s ? (s.label ?? `shot ${s.position}`) : shotId;
+}
+
+/** "1.3" = shot 1, take 3 — the speakable number printed on every tile. Raw
+ * take ids pass through untouched, so both vocabularies work everywhere. */
+async function resolveTake(slug: string, token: string): Promise<string> {
+  const m = /^(\d+)\.(\d+)$/.exec(token);
+  if (!m) return token;
+  const r = await api<TakesResponse>(`/projects/${slug}/takes`);
+  const shot = r.shots.find((x) => x.position === Number(m[1]));
+  if (!shot) fail(`no shot ${m[1]} in ${slug}`);
+  const take = r.takes.find((t) => t.shot_id === shot.id && t.ordinal === Number(m[2]));
+  if (!take) fail(`no take ${token} in ${slug} (see: mwk-og studio takes ${slug} --all)`);
+  return take.id;
 }
 
 async function cmdStyles(): Promise<void> {
@@ -262,7 +280,8 @@ async function watch(slug: string, intervalSec: number): Promise<void> {
       const prev = seen.get(t.id);
       if (prev === t.status) continue;
       seen.set(t.id, t.status);
-      const where = `${shotName(r.shots, t.shot_id)} · ${t.model_alias} #${t.iteration}`;
+      const pos = r.shots.find((x) => x.id === t.shot_id)?.position;
+      const where = `${pos}.${t.ordinal} ${shotName(r.shots, t.shot_id)} · ${t.model_alias} #${t.iteration}`;
       if (t.status === 'succeeded') console.log(`✓ ${where}  succeeded  ${money(t.cost_micros / 1e6)}`);
       else if (t.status === 'failed' || t.status === 'cancelled')
         console.log(`✗ ${where}  ${t.status}: ${t.error_kind ?? ''} ${t.error_message ?? ''}`.trim());
@@ -292,7 +311,7 @@ async function cmdRun(slug: string, argv: string[]): Promise<void> {
     { method: 'POST', body: {} },
   );
   console.log(`✓ run ${r.runId} started — ${r.takes} takes, ~${money(r.estimatedUsd)}`);
-  console.log(studioUrl(r.url));
+  console.log(studioUrl(`/projects/${slug}/runs/${r.runId}`));
   if (values.watch) await watch(slug, values.interval ? Number(values.interval) : 5);
 }
 
@@ -318,24 +337,66 @@ async function cmdTakes(slug: string, argv: string[]): Promise<void> {
         .join(' ');
       const err = t.status === 'failed' ? `  ${t.error_kind ?? ''}` : '';
       console.log(
-        `  ${t.id}  ${t.model_alias.padEnd(8)} #${t.iteration}  ${t.status.padEnd(10)} ${money(t.cost_micros / 1e6)}${err}  ${marks}`,
+        `  ${`${s.position}.${t.ordinal}`.padEnd(6)} ${t.model_alias.padEnd(8)} #${t.iteration}  ${t.status.padEnd(10)} ${money(t.cost_micros / 1e6)}${err}  ${marks}  ${t.id}`,
       );
     }
   }
   console.log(`\n${studioUrl(r.url)}`);
 }
 
+async function cmdUploadRef(argv: string[]): Promise<void> {
+  const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} });
+  if (!positionals.length) fail('usage: mwk-og studio upload-ref <file…>');
+  const files: { name: string; data: string }[] = [];
+  for (const f of positionals) {
+    const bytes = await readFile(f);
+    files.push({ name: f.split('/').pop() ?? f, data: bytes.toString('base64') });
+  }
+  const r = await api<{ saved: number; errors: string[]; ids: string[] }>('/media', {
+    method: 'POST',
+    body: { action: 'upload', files },
+  });
+  for (const e of r.errors) console.error(`✗ ${e}`);
+  r.ids.forEach((id, i) => console.log(`✓ ${files[i]?.name}  ${id}`));
+  console.log(studioUrl('/media'));
+}
+
+async function cmdZip(slug: string, argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    options: { takes: { type: 'string' }, designs: { type: 'string' }, out: { type: 'string' } },
+  });
+  if (!values.takes && !values.designs) fail('pass --takes 1.3,2.1,… or --designs <id,…>');
+  let qs: string;
+  if (values.takes) {
+    const ids = await Promise.all(multi([values.takes]).map((t) => resolveTake(slug, t)));
+    qs = `takes=${ids.join(',')}`;
+  } else {
+    qs = `designs=${multi([values.designs!]).join(',')}`;
+  }
+  const url = studioUrl(`/api/projects/${slug}/zip?${qs}`);
+  if (values.out) {
+    const token = process.env.MWK_STUDIO_TOKEN!;
+    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) fail(`${res.status} from zip: ${(await res.text()).slice(0, 300)}`);
+    await writeFile(values.out, Buffer.from(await res.arrayBuffer()));
+    console.log(`✓ saved ${values.out}`);
+  }
+  console.log(url);
+}
+
 async function takeAction(
   slug: string,
-  takeId: string,
+  takeToken: string,
   action: 'pick' | 'hide' | 'unhide' | 'reroll',
 ): Promise<void> {
+  const takeId = await resolveTake(slug, takeToken);
   const r = await api<{ ok: true; runId?: string }>(`/projects/${slug}/takes`, {
     method: 'POST',
     body: { action, take: takeId },
   });
   console.log(action === 'reroll' ? `✓ re-roll started (run ${r.runId})` : `✓ ${action}`);
-  console.log(studioUrl(`/projects/${slug}/shots`));
+  console.log(studioUrl(action === 'reroll' && r.runId ? `/projects/${slug}/runs/${r.runId}` : `/projects/${slug}/shots`));
 }
 
 export async function runStudio(argv: string[]): Promise<void> {
@@ -431,11 +492,13 @@ export async function runStudio(argv: string[]): Promise<void> {
         body: { action: 'reshoot', shot },
       });
       console.log(`✓ re-shoot started (run ${r.runId})`);
-      console.log(studioUrl(r.url));
+      console.log(studioUrl(`/projects/${slug}/runs/${r.runId}`));
       if (values.watch) await watch(slug, 5);
       break;
     }
     case 'refs': await cmdRefs(); break;
+    case 'upload-ref': await cmdUploadRef(rest); break;
+    case 'zip': await cmdZip(needSlug(), rest.slice(1)); break;
     case 'attach':
     case 'detach': {
       const slug = needSlug();

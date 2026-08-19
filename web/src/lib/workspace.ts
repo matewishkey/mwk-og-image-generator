@@ -29,6 +29,10 @@ export interface WsTake {
   picked: boolean;
   superseded: boolean;
   hidden: boolean;
+  /** Speakable per-shot number ("shot 1, take 3" = 1.3). Assigned once by
+   * (created_at, id) order over ALL of the shot's takes and never renumbered —
+   * hidden and superseded takes keep theirs, so a spoken "1.3" stays valid. */
+  ordinal: number;
 }
 
 export interface WsRun {
@@ -87,6 +91,22 @@ export async function takesPayload(env: Env, bundle: ProjectBundle): Promise<Tak
       .first<{ total: number }>(),
   ]);
 
+  // Ordinals: per-shot creation order. Derived, not stored — creation order is
+  // immutable, so recomputing always yields the same numbers.
+  const ordinals = new Map<string, number>();
+  const byShot = new Map<string, { id: string; created_at: string }[]>();
+  for (const t of takes.results) {
+    (byShot.get(t.shot_id) ?? byShot.set(t.shot_id, []).get(t.shot_id)!).push(t);
+  }
+  for (const group of byShot.values()) {
+    group.sort((a, b) =>
+      a.created_at === b.created_at
+        ? a.id.localeCompare(b.id)
+        : a.created_at.localeCompare(b.created_at),
+    );
+    group.forEach((t, i) => ordinals.set(t.id, i + 1));
+  }
+
   return {
     runs: runs.results,
     takes: takes.results.map((t) => ({
@@ -94,6 +114,7 @@ export async function takesPayload(env: Env, bundle: ProjectBundle): Promise<Tak
       picked: !!t.picked,
       superseded: !!t.superseded,
       hidden: !!t.hidden_at,
+      ordinal: ordinals.get(t.id)!,
     })),
     shots: bundle.shots.map((s) => ({
       id: s.id,

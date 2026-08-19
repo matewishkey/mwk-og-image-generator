@@ -127,6 +127,15 @@ export const POST: APIRoute = async (ctx) => {
       );
     }
 
+    // Every finished cell proves the executor is alive: buy the run's remaining
+    // takes 30 more minutes. Without this a >30-minute sweep (gpt2-heavy grids)
+    // gets its tail marked abandoned by the sweeper while cells are still landing.
+    stmts.push(
+      env.DB.prepare(
+        `UPDATE take SET lease_expires_at=?1 WHERE run_id=?2 AND status IN ('queued','running','rendering')`,
+      ).bind(new Date(Date.now() + 30 * 60_000).toISOString(), event.runId),
+    );
+
     await env.DB.batch(stmts);
     return Response.json({ ok: true });
   }

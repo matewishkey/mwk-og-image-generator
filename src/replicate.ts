@@ -21,7 +21,20 @@ export function replicate(): Replicate {
         'It lives in td-sops: sops -d ~/projects/td-sops/apps/mwk-og-image-generator.enc.env',
     );
   }
-  client = new Replicate({ auth });
+  client = new Replicate({
+    auth,
+    // Cancel-After (verified 2026-08-19: integer seconds or 30s/5m/2h, range
+    // 5s–24h, on prediction-creation requests): if this process dies mid-run,
+    // Replicate cancels the orphaned prediction instead of billing it to
+    // completion unattended. 15m clears even the slowest gpt2/video cells.
+    fetch: (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (init?.method === 'POST' && /\/predictions$/.test(new URL(url).pathname)) {
+        init = { ...init, headers: { ...(init.headers as Record<string, string>), 'Cancel-After': '15m' } };
+      }
+      return globalThis.fetch(input, init);
+    },
+  });
   return client;
 }
 

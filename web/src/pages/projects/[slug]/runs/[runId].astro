@@ -1,0 +1,120 @@
+---
+/**
+ * The run contact sheet: ONE page showing every take of a run, shots × styles,
+ * with speakable ordinals. This is the URL the CLI prints the moment a run
+ * exists (and the one mate opens to watch it fill in). Server-rendered; while
+ * the run is live the page politely refreshes itself.
+ */
+import Base from '../../../../layouts/Base.astro';
+import { ENV } from '../../../../lib/runtime';
+import { loadProject } from '../../../../lib/data';
+import { microsToUsd } from '../../../../lib/runs';
+import { sweepLeases } from '../../../../lib/sweep';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const slug = Astro.params.slug!;
+const runId = Astro.params.runId!;
+const bundle = await loadProject(env, team.id, slug);
+if (!bundle) return new Response('Not found', { status: 404 });
+const project = bundle.project;
+
+await sweepLeases(env);
+
+const run = await env.DB.prepare(
+  `SELECT id, kind, status, estimated_micros, started_at, finished_at
+     FROM run WHERE id = ?1 AND project_id = ?2`,
+)
+  .bind(runId, project.id)
+  .first<{ id: string; kind: string; status: string; estimated_micros: number; started_at: string; finished_at: string | null }>();
+if (!run) return new Response('No such run in this project', { status: 404 });
+
+// Ordinals are numbered over ALL of a shot's takes (creation order), so the
+// numbers here match the shot pages and what chat says — filtered to this run
+// only afterwards.
+const takes = await env.DB.prepare(
+  `SELECT * FROM (
+     SELECT t.id, t.run_id, t.status, t.model_alias, t.iteration, t.cost_micros,
+            t.art_key, t.art_thumb_key, t.thumb_key, t.error_kind, t.error_message,
+            sh.position AS shot_pos, sh.label AS shot_label, s.name AS style_name, s.slug AS style_slug,
+            ROW_NUMBER() OVER (PARTITION BY t.shot_id ORDER BY t.created_at, t.id) AS ord
+       FROM take t JOIN shot sh ON sh.id = t.shot_id JOIN style s ON s.id = t.style_id
+      WHERE t.team_id = ?2 AND sh.project_id = ?3)
+    WHERE run_id = ?1 ORDER BY shot_pos, style_slug, model_alias, iteration`,
+)
+  .bind(runId, team.id, project.id)
+  .all<{
+    id: string; run_id: string; status: string; model_alias: string; iteration: number;
+    cost_micros: number; art_key: string | null; art_thumb_key: string | null; thumb_key: string | null;
+    error_kind: string | null; error_message: string | null;
+    shot_pos: number; shot_label: string | null; style_name: string; style_slug: string; ord: number;
+  }>();
+
+const spent = await env.DB.prepare(
+  `SELECT coalesce(sum(usd_micros), 0) AS total FROM charge WHERE run_id = ?1`,
+)
+  .bind(runId)
+  .first<{ total: number }>();
+
+const live = ['queued', 'running'].includes(run.status);
+const byShot = new Map<number, { label: string | null; takes: typeof takes.results }>();
+for (const t of takes.results) {
+  if (!byShot.has(t.shot_pos)) byShot.set(t.shot_pos, { label: t.shot_label, takes: [] });
+  byShot.get(t.shot_pos)!.takes.push(t);
+}
+const okN = takes.results.filter((t) => t.status === 'succeeded').length;
+const failN = takes.results.filter((t) => t.status === 'failed').length;
+---
+
+<Base title={`${project.name} · run`} nav="projects" project={{ slug, name: project.name, active: 'shots' }}>
+  <h1>Run <span class="mono faint">{run.id.slice(-6).toLowerCase()}</span></h1>
+  <p class="run-head">
+    <span class={`status ${run.status}`}>{run.status}</span>
+    <span>{okN} of {takes.results.length} done{failN > 0 && <span class="ws-fail-chip"> · {failN} failed</span>}</span>
+    <span class="money">{microsToUsd(spent?.total ?? 0)} spent</span>
+    <span class="faint">est. {microsToUsd(run.estimated_micros)}</span>
+    {live && <span class="faint">refreshing…</span>}
+  </p>
+
+  {[...byShot.entries()].map(([pos, g]) => (
+    <section class="run-shot">
+      <h2><a href={`/projects/${slug}/shots/${pos}`}><span class="mono ws-pos">{pos}</span> {g.label ?? `Shot ${pos}`}</a></h2>
+      <div class="takes-grid">
+        {g.takes.map((t) => (
+          <figure class="take">
+            {t.status === 'succeeded' && (t.art_thumb_key ?? t.art_key ?? t.thumb_key) ? (
+              <img src={`/img/${t.art_thumb_key ?? t.art_key ?? t.thumb_key}`} alt={`take ${pos}.${t.ord}`} loading="lazy" width={640} height={360} />
+            ) : (
+              <div class="take-hold">
+                <span class={`status ${t.status}`}>{t.status}</span>
+                {t.status === 'failed' && (
+                  <span class="take-err">{t.error_kind}: {(t.error_message ?? '').slice(0, 120)}</span>
+                )}
+              </div>
+            )}
+            <figcaption>
+              <span class="mono ws-ordinal">{pos}.{t.ord}</span>
+              <span class="mono">{t.model_alias}</span>
+              <span class="run-style">{t.style_name}</span>
+              <span class="mono faint">#{t.iteration}</span>
+              {t.cost_micros > 0 && <span class="money">{microsToUsd(t.cost_micros)}</span>}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+    </section>
+  ))}
+</Base>
+
+{live && <script is:inline>setTimeout(() => location.reload(), 8000);</script>}
+
+<style>
+  .run-head { display: flex; gap: 0.9rem; align-items: baseline; flex-wrap: wrap; }
+  .run-shot { margin-top: 1.6rem; }
+  .run-shot h2 a { text-decoration: none; color: inherit; }
+  .run-shot h2 a:hover { text-decoration: underline; }
+  .run-style { color: var(--mute); font-size: 0.75rem; }
+  .faint { color: var(--faint); }
+</style>

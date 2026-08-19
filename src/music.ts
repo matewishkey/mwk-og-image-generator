@@ -125,7 +125,8 @@ export async function generateTrack(
   const bytes = await firstOutput(output);
   // Extension from the BYTES — Lyria serves 48kHz PCM WAV behind an
   // extension-less URL, so the URL is not evidence of the format.
-  const ext = bytes.subarray(0, 4).toString('latin1') === 'RIFF' ? '.wav' : '.mp3';
+  const riff = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
+  const ext = riff ? '.wav' : '.mp3';
   await mkdir(outDir, { recursive: true });
   const file = join(outDir, `${name}${ext}`);
   await writeFile(file, bytes);
