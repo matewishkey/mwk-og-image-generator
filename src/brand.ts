@@ -12,8 +12,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import sharp from 'sharp';
-import type { OverlayOptions } from 'sharp';
+import sharp, { type OverlayOptions } from 'sharp';
 
 // The shape (and its zod schema) lives in brand-config.ts — a PURE module the
 // web worker can import; this file pulls in sharp and is worker-excluded.
@@ -129,6 +128,97 @@ export async function textLayer(opts: {
 
   const md = await sharp(buf).metadata();
   return { buf, width: md.width ?? 0, height: md.height ?? 0 };
+}
+
+/** Recolour a rendered layer to one flat colour, keeping its alpha. */
+async function tinted(
+  layer: { buf: Buffer; width: number; height: number },
+  hex: string,
+): Promise<Buffer> {
+  const alpha = await sharp(layer.buf).extractChannel('alpha').png().toBuffer();
+  return sharp({
+    create: { width: layer.width, height: layer.height, channels: 3, background: hex },
+  })
+    .joinChannel(alpha)
+    .png()
+    .toBuffer();
+}
+
+export interface TextFx {
+  /** Resolved hex — tokens resolve caller-side, same contract as textLayer. */
+  stroke?: string;
+  /** Outline radius in px. */
+  strokeWidth?: number;
+  shadow?: string;
+  /** Blur sigma in px. */
+  shadowBlur?: number;
+  /** Down-right offset in px (negative = up-left). */
+  shadowOffset?: number;
+}
+
+/**
+ * Shadow = the layer recoloured + blurred + offset, composited UNDER the ink.
+ * Stroke = a ring composite: the recoloured layer stamped around a circle of
+ * radius strokeWidth. Both are deterministic sharp passes — never an AI touch,
+ * for the same reason branding is composited. Callers skip the call entirely
+ * when neither is set, so undecorated text stays byte-identical. Returns pad
+ * (how far the canvas grew on every side) so the INK stays anchored.
+ */
+export async function decorateText(
+  layer: { buf: Buffer; width: number; height: number },
+  fx: TextFx,
+): Promise<{ buf: Buffer; width: number; height: number; pad: number }> {
+  const strokeW = fx.stroke ? Math.max(1, Math.round(fx.strokeWidth ?? 2)) : 0;
+  const blur = fx.shadow ? Math.max(0.3, fx.shadowBlur ?? 4) : 0;
+  const off = fx.shadow ? Math.round(fx.shadowOffset ?? 2) : 0;
+  const pad = Math.ceil(strokeW + (fx.shadow ? blur * 3 + Math.abs(off) : 0));
+  if (!pad) return { ...layer, pad: 0 };
+
+  const W = layer.width + pad * 2;
+  const H = layer.height + pad * 2;
+  const comps: OverlayOptions[] = [];
+
+  if (fx.shadow) {
+    // The offset is baked into an asymmetric extend (pad ≥ |off| always) so
+    // the blur sees the shifted image and the composite lands at (0,0).
+    const sh = await sharp(await tinted(layer, fx.shadow))
+      .extend({
+        top: pad + off,
+        bottom: pad - off,
+        left: pad + off,
+        right: pad - off,
+        background: '#00000000',
+      })
+      .blur(blur)
+      .png()
+      .toBuffer();
+    comps.push({ input: sh, top: 0, left: 0 });
+  }
+  if (fx.stroke) {
+    const ring = await tinted(layer, fx.stroke);
+    // Stamps at ≤1px arc spacing, rings every 2px of radius inward — sparser
+    // rings scallop the outline visibly (~2.7px gaps at 16 stamps, radius 7).
+    for (let r = strokeW; r > 0; r -= 2) {
+      const n = Math.max(8, Math.ceil(2 * Math.PI * r));
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        comps.push({
+          input: ring,
+          top: pad + Math.round(Math.sin(a) * r),
+          left: pad + Math.round(Math.cos(a) * r),
+        });
+      }
+    }
+  }
+  comps.push({ input: layer.buf, top: pad, left: pad });
+
+  const buf = await sharp({
+    create: { width: W, height: H, channels: 4, background: '#00000000' },
+  })
+    .composite(comps)
+    .png()
+    .toBuffer();
+  return { buf, width: W, height: H, pad };
 }
 
 /**

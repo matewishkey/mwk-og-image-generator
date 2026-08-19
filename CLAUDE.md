@@ -393,8 +393,20 @@ Six reviewers (3 research, 3 critique) + mate's answers fixed these; don't relit
   (`recipes.md?raw`) — vocabulary, styles with proof thumbs (proofThumbs), templates by
   picture count. Editing recipes.md requires a web deploy to reach the page; never
   hand-copy recipe text anywhere.
-- Typography (8c) stays sharp+pango — satori rejected (no kerning/ligatures, broken
-  variable fonts). Shadow = recolored+blurred duplicate layer; outline = ring composite.
+- **Typography (8c, shipped)** stays sharp+pango — satori rejected (no kerning/ligatures,
+  broken variable fonts). TextSpec grew `name` (named layer for revision instructions —
+  never affects rendering), `face` (typeface override, KIT faces only), `size` (pt at kit
+  canvas width, replaces the face's base; sizeScale still multiplies), `weight` (all three
+  vendored faces are variable-wght, so it genuinely renders), negative `trackingEm`
+  (min -0.1), `stroke`/`strokeWidth` and `shadow`/`shadowBlur`/`shadowOffset` (fractions
+  of font size, tokens only). Shadow = the layer recolored + blurred + offset via
+  decorateText in src/brand.ts; outline = ring composite, stamps at ≤1px arc spacing on
+  rings every 2px inward — sparser rings scallop visibly. decorateText returns `pad` and
+  renderTexts subtracts it, so the INK stays anchored; undecorated text is proven
+  byte-identical (2-config harness, cmp). The engine's baked schema strips the fields, so
+  typography is live only from the round-8c engine deploy on. All fields in the editor's
+  typography row + the generate brief. NOTE the house brand is dark-scheme: paper=#101317
+  (dark), ink=#f4f2f6 (light) — don't reason about tokens from their names.
 - Full history: ~/.claude/plans/pls-use-3-reviewer-lazy-dream.md.
 
 ## The studio CLI — how Claude drives the site

@@ -135,7 +135,8 @@ export const TextSpecSchema = z.object({
    *  red permitted at text size). */
   accentColor: ColorTokenSchema.optional(),
   case: z.enum(['upper', 'none']).default('none'),
-  trackingEm: z.number().min(0).max(1).optional(),
+  /** Letter spacing as a fraction of the font size (ems); negative tightens. */
+  trackingEm: z.number().min(-0.1).max(1).optional(),
   /** Text decoration (round 7) — attribute-level pango effects, all optional so
    *  every stored template renders byte-identical. 'accent' is a single
    *  underline in underlineColor ?? redDeep (the hover-line look). */
@@ -146,6 +147,30 @@ export const TextSpecSchema = z.object({
   highlight: ColorTokenSchema.optional(),
   highlightAlpha: z.number().min(0).max(1).optional(),
   strike: z.boolean().optional(),
+  /** Typography (round 8c) — all optional, so every stored template renders
+   *  byte-identical when they are unset. */
+  /** Named layer (the Bannerbear pattern): lets a revision instruction address
+   *  one text ("make the price smaller"). Never affects rendering. */
+  name: z.string().min(1).max(40).optional(),
+  /** Typeface override — the KIT's faces only, never a hand-typed pango
+   *  family (a mismatch silently falls back to DejaVu). `font` keeps setting
+   *  the size baseline and defaults; `face` swaps only the typeface. */
+  face: z.enum(['title', 'kicker', 'tagline']).optional(),
+  /** Explicit point size at the kit's canvas width; replaces the face's base
+   *  size. sizeScale still multiplies on top. */
+  size: z.number().int().min(8).max(400).optional(),
+  /** Weight override — all three vendored faces are variable with a wght
+   *  axis, so any value in range genuinely renders. */
+  weight: z.number().int().min(100).max(1000).optional(),
+  /** Outline: a ring composite of the recoloured layer (never an AI pass).
+   *  strokeWidth is a fraction of the font size. */
+  stroke: ColorTokenSchema.optional(),
+  strokeWidth: z.number().min(0.01).max(0.2).optional(),
+  /** Drop shadow: the layer recoloured + blurred + offset, under the ink.
+   *  Blur and offset are fractions of the font size. */
+  shadow: ColorTokenSchema.optional(),
+  shadowBlur: z.number().min(0.02).max(0.5).optional(),
+  shadowOffset: z.number().min(-0.3).max(0.5).optional(),
   z: z.number().int().min(0).max(100).default(60),
 });
 export type TextSpec = z.infer<typeof TextSpecSchema>;

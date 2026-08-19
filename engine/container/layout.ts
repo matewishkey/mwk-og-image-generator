@@ -8,7 +8,7 @@
  */
 
 import sharp from 'sharp';
-import { brandOverlay, textLayer, type BrandConfig } from '../../src/brand.ts';
+import { brandOverlay, decorateText, textLayer, type BrandConfig } from '../../src/brand.ts';
 import {
   layoutPanels,
   type Cell,
@@ -316,12 +316,14 @@ async function renderTexts(
   for (const t of texts) {
     const content = typeof t.content === 'string' ? t.content : roleValue[t.content.role];
     if (!content?.trim()) continue; // unbound role: skip the layer, never render a placeholder
-    const spec = brand[t.font];
+    // `font` sets the size baseline and defaults; `face` (round 8c) swaps only
+    // the typeface — always one of the kit's faces, never a hand-typed family.
+    const spec = brand[t.face ?? t.font];
     const scale = (W / brand.canvas.width) * t.sizeScale;
-    const size = Math.min(400, Math.max(8, Math.round(spec.size * scale)));
+    const size = Math.min(400, Math.max(8, Math.round((t.size ?? brand[t.font].size) * scale)));
     const layer = await textLayer({
       text: t.case === 'upper' ? content.toUpperCase() : content,
-      font: { ...spec, size },
+      font: { ...spec, size, ...(t.weight ? { weight: t.weight } : {}) },
       color: brand.colors[t.color],
       accent: brand.colors[t.accentColor ?? 'redDeep'],
       trackingEm: t.trackingEm ?? (t.font === 'kicker' ? brand.kicker.trackingEm : undefined),
@@ -337,6 +339,19 @@ async function renderTexts(
       highlightAlpha: t.highlightAlpha,
       strike: t.strike,
     });
+    // Shadow/stroke grow the canvas by `pad` on every side; alignment is
+    // computed from the INK width and the pad subtracted after, so the text
+    // itself stays exactly where an undecorated layer would sit.
+    const dec =
+      t.stroke || t.shadow
+        ? await decorateText(layer, {
+            stroke: t.stroke ? brand.colors[t.stroke] : undefined,
+            strokeWidth: t.stroke ? (t.strokeWidth ?? 0.05) * size : undefined,
+            shadow: t.shadow ? brand.colors[t.shadow] : undefined,
+            shadowBlur: t.shadow ? (t.shadowBlur ?? 0.1) * size : undefined,
+            shadowOffset: t.shadow ? (t.shadowOffset ?? 0.05) * size : undefined,
+          })
+        : { ...layer, pad: 0 };
     const boxW = Math.round(t.w * W);
     const left =
       t.align === 'center'
@@ -344,7 +359,12 @@ async function renderTexts(
         : t.align === 'right'
           ? Math.round(t.x * W + boxW - layer.width)
           : Math.round(t.x * W);
-    out.push({ input: layer.buf, top: Math.round(t.y * H), left: Math.max(0, left), z: t.z });
+    out.push({
+      input: dec.buf,
+      top: Math.round(t.y * H) - dec.pad,
+      left: Math.max(0, left) - dec.pad,
+      z: t.z,
+    });
   }
   return out;
 }

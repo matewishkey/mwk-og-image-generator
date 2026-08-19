@@ -92,7 +92,11 @@ minus a reserved bottom band when lockup is "bottom"); texts and shapes map to t
                "align":"left"|"center"|"right", "sizeScale":0.3-4, "color":"ink",
                "accentColor":"redDeep", "case":"upper"|"none",
                "underline":"accent"|"single"|"low", "underlineColor":<token>,
-               "highlight":<token>, "highlightAlpha":0-1, "strike":true, "z":60 }],
+               "highlight":<token>, "highlightAlpha":0-1, "strike":true,
+               "name":"headline", "face":"title"|"kicker"|"tagline", "size":8-400,
+               "weight":100-1000, "trackingEm":-0.1-1,
+               "stroke":<token>, "strokeWidth":0.01-0.2,
+               "shadow":<token>, "shadowBlur":0.02-0.5, "shadowOffset":-0.3-0.5, "z":60 }],
   "shapes": [{ "kind":"rect"|"rule"|"gradient", "x":0, "y":0.9, "w":1, "h":0.1,
                "color":"red", "opacity":0.9, "angle":0, "z":40 }],
   "background": "paper",
@@ -110,7 +114,16 @@ Z ORDER: cells default 0, shapes 40, texts 60; the lockup always renders last. A
 feather fades inside its own rect on the listed edges — use it where cells overlap.
 Text "y" is the ink top of the line. Decoration: "underline":"accent" draws the hover-line
 look (single underline in the kit accent) — good on one word or a short title; "highlight"
-paints a marker block behind the glyphs (use a quiet token + highlightAlpha ~0.35, sparingly). Craft guardrails: at most 2 extra text layers beyond a
+paints a marker block behind the glyphs (use a quiet token + highlightAlpha ~0.35, sparingly).
+Typography: "name" labels a layer so a revision instruction can address it — name every
+text you place. "face" swaps the typeface to another KIT face (kicker's mono at title
+size is a strong editorial look); "size" is an explicit point size at the kit canvas
+width (replaces the face's base; sizeScale still multiplies); "weight" rides the variable
+wght axis (900 for punch, 300 for airy); "trackingEm" may go slightly negative to tighten
+a big display line. "stroke" draws a sticker-style outline (strokeWidth ~0.04-0.06 of the
+font size) and "shadow" a soft drop shadow (shadowBlur ~0.1, shadowOffset ~0.05) — both
+resolve brand tokens, both read best on text sitting on imagery; never stack them on
+small body text. Craft guardrails: at most 2 extra text layers beyond a
 role-bound title; freeform cards may use lockup "none" with a role-bound projectTitle text
 instead. NEVER propose more cells than the inventory has images.
 

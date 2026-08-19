@@ -348,6 +348,62 @@ export default function LayoutEditor(p: { initial: EditorProps }) {
                   )}
                   <button type="button" class="linkish le-del" onClick={() => dropItem('texts', i)}>✕</button>
                 </div>
+                <div class="le-row">
+                  <label class="le-num"><span>name</span>
+                    <input type="text" value={str(t.name)} placeholder="headline"
+                      onInput={(e) => patchItem('texts', i, { name: (e.target as HTMLInputElement).value || undefined })} />
+                  </label>
+                  <label class="le-num"><span>face</span>
+                    <select value={str(t.face, '')} onChange={(e) => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      patchItem('texts', i, { face: v || undefined });
+                    }}>
+                      <option value="">(font's own)</option>
+                      {FONTS.map((f) => <option value={f}>{f}</option>)}
+                    </select>
+                  </label>
+                  <label class="le-num"><span>size (pt, blank = face)</span>
+                    <input type="number" value={typeof t.size === 'number' ? t.size : ''} min={8} max={400} step={1}
+                      onInput={(e) => {
+                        const v = (e.target as HTMLInputElement).value;
+                        patchItem('texts', i, { size: v === '' ? undefined : Math.round(Number(v)) });
+                      }} />
+                  </label>
+                  <label class="le-num"><span>weight</span>
+                    <input type="number" value={typeof t.weight === 'number' ? t.weight : ''} min={100} max={1000} step={100}
+                      onInput={(e) => {
+                        const v = (e.target as HTMLInputElement).value;
+                        patchItem('texts', i, { weight: v === '' ? undefined : Math.round(Number(v)) });
+                      }} />
+                  </label>
+                  {numField('tracking (em)', num(t.trackingEm), (n) => patchItem('texts', i, { trackingEm: n || undefined }), 0.01, -0.1, 1)}
+                  <label class="le-num"><span>outline</span>
+                    <select value={str(t.stroke, '')} onChange={(e) => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      patchItem('texts', i, { stroke: v || undefined, strokeWidth: v ? num(t.strokeWidth, 0.05) : undefined });
+                    }}>
+                      <option value="">none</option>
+                      {TOKENS.map((k) => <option value={k}>{k}</option>)}
+                    </select>
+                  </label>
+                  {t.stroke != null &&
+                    numField('outline w', num(t.strokeWidth, 0.05), (n) => patchItem('texts', i, { strokeWidth: n }), 0.01, 0.01, 0.2)}
+                  <label class="le-num"><span>shadow</span>
+                    <select value={str(t.shadow, '')} onChange={(e) => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      patchItem('texts', i, { shadow: v || undefined });
+                    }}>
+                      <option value="">none</option>
+                      {TOKENS.map((k) => <option value={k}>{k}</option>)}
+                    </select>
+                  </label>
+                  {t.shadow != null && (
+                    <>
+                      {numField('blur', num(t.shadowBlur, 0.1), (n) => patchItem('texts', i, { shadowBlur: n }), 0.02, 0.02, 0.5)}
+                      {numField('offset', num(t.shadowOffset, 0.05), (n) => patchItem('texts', i, { shadowOffset: n }), 0.01, -0.3, 0.5)}
+                    </>
+                  )}
+                </div>
               </div>
             ))}
             {(cfg.texts?.length ?? 0) < 6 && (
