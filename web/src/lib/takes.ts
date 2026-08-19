@@ -64,7 +64,7 @@ export async function applyTakeAction(env: Env, o: TakeActionOpts): Promise<Take
   const shot = o.bundle.shots.find((s) => s.id === take.shot_id);
   if (!shot) return { error: 'The take’s shot no longer exists.', status: 409 };
   try {
-    const runId = await createRun(env, {
+    const { runId } = await createRun(env, {
       teamId: o.team.id,
       userId: o.userId,
       project: o.bundle.project,

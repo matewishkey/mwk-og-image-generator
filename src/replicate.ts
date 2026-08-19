@@ -28,11 +28,18 @@ export function replicate(): Replicate {
     // Replicate cancels the orphaned prediction instead of billing it to
     // completion unattended. 15m clears even the slowest gpt2/video cells.
     fetch: (input, init) => {
-      const url = typeof input === 'string' ? input : input.url;
-      if (init?.method === 'POST' && /\/predictions$/.test(new URL(url).pathname)) {
-        init = { ...init, headers: { ...(init.headers as Record<string, string>), 'Cancel-After': '15m' } };
+      // The client passes string | URL | Request — derive the path defensively;
+      // an unparseable input just goes through without the header.
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      try {
+        if (init?.method === 'POST' && /\/predictions$/.test(new URL(url).pathname)) {
+          init = { ...init, headers: { ...(init.headers as Record<string, string>), 'Cancel-After': '15m' } };
+        }
+      } catch {
+        /* pass through untouched */
       }
-      return globalThis.fetch(input, init);
+      return globalThis.fetch(input as string | Request, init);
     },
   });
   return client;

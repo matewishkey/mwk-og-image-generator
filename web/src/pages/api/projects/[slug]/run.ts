@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { ENV } from '../../../../lib/runtime';
-import { err, ok } from '../../../../lib/api';
+import { err, ok, readJson } from '../../../../lib/api';
 import { loadProject } from '../../../../lib/data';
 import { createRun, estimateMicros, loadProjectRefs } from '../../../../lib/runs';
 
@@ -16,8 +16,13 @@ export const POST: APIRoute = async (ctx) => {
   if (!bundle.shots.length) return err(400, 'add at least one shot first');
 
   const models: string[] = JSON.parse(bundle.project.models);
+  // dispatch:'local' = direct-ingest (round 8b): the run rows are created
+  // exactly as always, but the payload comes BACK to the caller (the studio
+  // CLI on the dev box), which executes it and posts the same events.
+  const body = await readJson<{ dispatch?: string }>(ctx.request);
+  const local = body?.dispatch === 'local';
   try {
-    const runId = await createRun(ENV, {
+    const { runId, request } = await createRun(ENV, {
       teamId: team.id,
       userId: user.id,
       project: bundle.project,
@@ -26,6 +31,7 @@ export const POST: APIRoute = async (ctx) => {
       models,
       iterations: bundle.project.iterations,
       kind: 'full',
+      dispatch: local ? 'return' : undefined,
     });
     const refs = await loadProjectRefs(ENV, bundle.project.id);
     const cells = bundle.shots.reduce(
@@ -38,7 +44,8 @@ export const POST: APIRoute = async (ctx) => {
         takes: cells * models.length,
         estimatedUsd:
           estimateMicros(models, bundle.project.tier, cells, refs.megapixels) / 1_000_000,
-        url: `/projects/${bundle.project.slug}/shots`,
+        url: `/projects/${bundle.project.slug}/runs/${runId}`,
+        ...(local ? { request } : {}),
       },
       201,
     );

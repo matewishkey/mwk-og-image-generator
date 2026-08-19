@@ -1,32 +1,23 @@
 /**
  * The engine: the CLI's own runner behind one HTTP endpoint.
  *
- * POST /run drives src/run.ts runSweep unchanged — queue, concurrency, retries and
- * the brand band are exactly what the CLI does. Take outputs go to R2 over its S3
- * API; every transition is reported back to the web app as an HMAC-signed event.
- * All secrets (Replicate token, R2 keys) live HERE, never in the web app.
+ * POST /run drives the shared executor (src/executor.ts — the same code the
+ * studio CLI runs for direct-ingest local runs). Take outputs go to R2 over its
+ * S3 API; every transition is reported back to the web app as an HMAC-signed
+ * event. All secrets (Replicate token, R2 keys) live HERE, never in the web app.
  */
 
 import { createServer } from 'node:http';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join, extname } from 'node:path';
-import { tmpdir } from 'node:os';
-import { AwsClient } from 'aws4fetch';
 import sharp from 'sharp';
-import { estimate, refMegapixels, runSweep, type Cell } from '../../src/run.ts';
-import { resolveModel } from '../../src/models.ts';
+import { createExecutor } from '../../src/executor.ts';
 import {
   LayoutConfigSchema,
-  seamHeaders,
   seamVerify,
-  type EngineEvent,
   type EngineGenerateRequest,
   type EngineRenderRequest,
   type EngineRunRequest,
 } from '../../src/seam.ts';
 import { runText } from '../../src/replicate.ts';
-import { loadBrand, type BrandConfig } from '../../src/brand.ts';
-import { BrandConfigSchema } from '../../src/brand-config.ts';
 import { renderDesign } from './layout.ts';
 import { applyEffect } from './effects.ts';
 
@@ -39,261 +30,20 @@ const need = (name: string): string => {
 };
 
 const SEAM_SECRET = need('SEAM_SECRET');
-const EVENTS_URL = need('EVENTS_URL');
-const R2_ENDPOINT = need('R2_ENDPOINT');
-const R2_BUCKET = need('R2_BUCKET');
 
-const r2 = new AwsClient({
-  accessKeyId: need('R2_ACCESS_KEY_ID'),
-  secretAccessKey: need('R2_SECRET_ACCESS_KEY'),
-  region: 'auto',
-  service: 's3',
+const executor = createExecutor({
+  seamSecret: SEAM_SECRET,
+  eventsUrl: need('EVENTS_URL'),
+  r2: {
+    endpoint: need('R2_ENDPOINT'),
+    bucket: need('R2_BUCKET'),
+    accessKeyId: need('R2_ACCESS_KEY_ID'),
+    secretAccessKey: need('R2_SECRET_ACCESS_KEY'),
+  },
 });
-
-async function r2Put(key: string, body: Buffer, contentType: string): Promise<void> {
-  const res = await r2.fetch(`${R2_ENDPOINT}/${R2_BUCKET}/${key}`, {
-    method: 'PUT',
-    headers: { 'content-type': contentType },
-    body: new Uint8Array(body),
-  });
-  if (!res.ok) throw new Error(`R2 PUT ${key}: ${res.status} ${await res.text()}`);
-}
-
-async function r2Get(key: string): Promise<Buffer> {
-  const res = await r2.fetch(`${R2_ENDPOINT}/${R2_BUCKET}/${key}`);
-  if (!res.ok) throw new Error(`R2 GET ${key}: ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
-}
-
-/** Events must arrive; a lost cell event is a take stuck 'running' until the sweeper. */
-async function postEvent(event: EngineEvent): Promise<void> {
-  const body = JSON.stringify(event);
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    try {
-      const res = await fetch(EVENTS_URL, {
-        method: 'POST',
-        headers: await seamHeaders(SEAM_SECRET, body),
-        body,
-      });
-      if (res.ok) return;
-      console.error(`event ${event.kind}: web replied ${res.status}`);
-    } catch (e) {
-      console.error(`event ${event.kind}: ${(e as Error).message}`);
-    }
-    await new Promise((r) => setTimeout(r, attempt * 2000));
-  }
-  console.error(`event ${event.kind} DROPPED after 5 attempts`);
-}
+const { r2Get, r2Put, resolveBrand } = executor;
 
 const activeRuns = new Set<string>();
-
-/**
- * Materialise an uploaded logo mark (R2) as a local file so brand.ts's
- * readFile path works unchanged. Keys are content-addressed, so caching by
- * key is sound for the life of the instance.
- */
-const markCache = new Map<string, string>();
-async function localMark(markKey: string): Promise<string> {
-  const hit = markCache.get(markKey);
-  if (hit) return hit;
-  const p = join(tmpdir(), `mark-${markKey.split('/').pop()}`);
-  await writeFile(p, new Uint8Array(await r2Get(markKey)));
-  markCache.set(markKey, p);
-  return p;
-}
-
-/**
- * Materialise an uploaded font (R2 fileKey) as a local file, same
- * content-addressed cache as marks. The kit's `family` was parsed from this
- * file's own name table at upload, so pango resolves the face correctly.
- */
-const fontCache = new Map<string, string>();
-async function localFont(fileKey: string): Promise<string> {
-  const hit = fontCache.get(fileKey);
-  if (hit) return hit;
-  const p = join(tmpdir(), `font-${fileKey.split('/').pop()}`);
-  await writeFile(p, new Uint8Array(await r2Get(fileKey)));
-  fontCache.set(fileKey, p);
-  return p;
-}
-
-/** Validate a kit off the seam (a cast let a broken kit crash pango mid-render). */
-async function resolveBrand(
-  raw: unknown,
-  markKey?: string,
-  theme?: 'light' | 'dark',
-): Promise<BrandConfig> {
-  let brand = raw ? BrandConfigSchema.parse(raw) : await loadBrand();
-  // Dark theme: overlay the kit's dark palette when it has one; a kit without
-  // colorsDark renders identically in both themes rather than erroring.
-  if (theme === 'dark' && brand.colorsDark) {
-    brand = { ...brand, colors: { ...brand.colors, ...brand.colorsDark } };
-  }
-  if (markKey) brand = { ...brand, logo: { ...brand.logo, mark: await localMark(markKey) } };
-  for (const role of ['title', 'kicker', 'tagline'] as const) {
-    const fk = brand[role].fileKey;
-    if (fk) brand = { ...brand, [role]: { ...brand[role], file: await localFont(fk) } };
-  }
-  return brand;
-}
-
-async function executeRun(req: EngineRunRequest, refBytes: Map<string, Buffer>, brand: BrandConfig): Promise<void> {
-  const outDir = join(tmpdir(), `run-${req.runId}`);
-  await mkdir(outDir, { recursive: true });
-  const uploads: Promise<void>[] = [];
-
-  try {
-    // References arrive as R2 keys; runSweep gets ordinary file paths. A key
-    // shared by several ideas (the same chained character) is written once.
-    const refPathByKey = new Map<string, string>();
-    let refN = 0;
-    const localRef = async (key: string): Promise<string> => {
-      const hit = refPathByKey.get(key);
-      if (hit) return hit;
-      const bytes = refBytes.get(key);
-      if (!bytes) throw new Error(`ref ${key} was not prefetched`);
-      const p = join(outDir, `ref-${refN++}${extname(key) || '.png'}`);
-      await writeFile(p, new Uint8Array(bytes));
-      refPathByKey.set(key, p);
-      return p;
-    };
-    const refPaths: string[] = [];
-    for (const key of req.refKeys) refPaths.push(await localRef(key));
-    const ideaRefs: (string[] | null)[] = [];
-    for (const idea of req.ideas) {
-      if (!idea.refKeys?.length) {
-        ideaRefs.push(null);
-        continue;
-      }
-      const paths: string[] = [];
-      for (const key of idea.refKeys) paths.push(await localRef(key));
-      ideaRefs.push(paths);
-    }
-
-    const models = req.models.map(resolveModel);
-    // SeamIdea.prompt is the RAW shot idea; runSweep composes it with the style
-    // exactly once. Per-shot style overrides ride along in ideaStyles.
-    const ideas = req.ideas.map((i) => i.prompt);
-    const styles = req.styles?.length ? req.styles : [req.style];
-    const opts = {
-      ideas,
-      ideaStyles: req.ideas.map((i) => i.style ?? null),
-      ideaRefs,
-      ideaRefRoles: req.ideas.map((i) => i.refRole ?? null),
-      styles,
-      models,
-      iterations: req.iterations,
-      refs: refPaths,
-      title: req.title,
-      kicker: req.kicker,
-      tagline: req.tagline,
-      tier: req.tier,
-      allowText: req.allowText,
-      refRole: req.refRole,
-      extra: req.extra,
-      brand,
-      outDir,
-      concurrency: req.concurrency ?? 4,
-    };
-
-    const refMp = await refMegapixels(refPaths);
-    // Mirrors runSweep's queue: an overridden idea renders once, not per style.
-    const overridden = req.ideas.filter((i) => i.style).length;
-    const total =
-      (overridden + (ideas.length - overridden) * styles.length) * models.length * req.iterations;
-    await postEvent({
-      kind: 'run-started',
-      runId: req.runId,
-      total,
-      estimatedUsd: estimate(opts, refMp),
-    });
-
-    const manifest = await runSweep({
-      ...opts,
-      onCell: (cell: Cell) => {
-        uploads.push(reportCell(req, outDir, cell));
-      },
-    });
-
-    await Promise.all(uploads);
-    await postEvent({
-      kind: 'run-finished',
-      runId: req.runId,
-      estimatedUsd: manifest.estimatedUsd,
-      actualUsd: manifest.actualUsd,
-    });
-  } finally {
-    activeRuns.delete(req.runId);
-    await rm(outDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-async function reportCell(req: EngineRunRequest, outDir: string, cell: Cell): Promise<void> {
-  const shotId = req.ideas[cell.ideaIndex - 1]?.shotId ?? 'unknown';
-  // The style is part of the key: under multi-style the same shot × model ×
-  // iteration renders once PER style, and identical keys would silently overwrite.
-  const base = `${req.r2Prefix}/takes/${shotId}__${cell.style}__${cell.model}__${cell.iteration}`;
-
-  let artKey: string | undefined;
-  let artThumbKey: string | undefined;
-  let cardKey: string | undefined;
-  let thumbKey: string | undefined;
-  let width: number | undefined;
-  let height: number | undefined;
-
-  try {
-    if (!cell.error && cell.artFile && cell.ogFile) {
-      const art = await readFile(join(outDir, cell.artFile));
-      const card = await readFile(join(outDir, cell.ogFile));
-      const meta = await sharp(art).metadata();
-      width = meta.width;
-      height = meta.height;
-      artKey = `${base}/art.png`;
-      artThumbKey = `${base}/art-thumb.webp`;
-      cardKey = `${base}/card.png`;
-      thumbKey = `${base}/thumb.webp`;
-      // Two thumbs on purpose: the CARD thumb for design/pack contexts, the raw
-      // ART thumb for shot-context grids (the band does not belong there).
-      const thumb = await sharp(card).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
-      const artThumb = await sharp(art).resize({ width: 640 }).webp({ quality: 80 }).toBuffer();
-      await r2Put(artKey, art, 'image/png');
-      await r2Put(artThumbKey, artThumb, 'image/webp');
-      await r2Put(cardKey, card, 'image/png');
-      await r2Put(thumbKey, thumb, 'image/webp');
-    }
-  } catch (e) {
-    // The model was already billed even though storage failed; the event still goes
-    // out (with the cost) so the ledger row is written — the take fails at 'upload'.
-    cell.error = `upload: ${(e as Error).message}`;
-    artKey = undefined;
-    artThumbKey = undefined;
-    cardKey = undefined;
-    thumbKey = undefined;
-  }
-
-  await postEvent({
-    kind: 'cell',
-    runId: req.runId,
-    shotId,
-    styleSlug: cell.style,
-    modelAlias: cell.model,
-    modelId: cell.modelId,
-    iteration: cell.iteration,
-    tier: cell.tier,
-    ok: !cell.error,
-    prompt: cell.prompt,
-    costUsd: cell.costUsd,
-    seconds: cell.seconds ?? 0,
-    retries: cell.retries,
-    error: cell.error,
-    artKey,
-    artThumbKey,
-    cardKey,
-    thumbKey,
-    width,
-    height,
-  });
-}
 
 const server = createServer((req, res) => {
   const chunks: Buffer[] = [];
@@ -387,13 +137,12 @@ const server = createServer((req, res) => {
       }
       // Resolve refs and the kit before acknowledging, so a bad key or a broken
       // kit fails the request (createRun marks the run failed/dispatch), not the run.
-      const refKeys = new Set<string>(parsed.refKeys);
-      for (const idea of parsed.ideas) for (const k of idea.refKeys ?? []) refKeys.add(k);
-      const refBytes = new Map<string, Buffer>();
-      for (const key of refKeys) refBytes.set(key, await r2Get(key));
-      const runBrand = await resolveBrand(parsed.brand, parsed.markKey);
+      const { refBytes, brand: runBrand } = await executor.prepareRun(parsed);
       activeRuns.add(parsed.runId);
-      executeRun(parsed, refBytes, runBrand).catch((e) => console.error(`run ${parsed.runId}:`, e));
+      executor
+        .executeRun(parsed, refBytes, runBrand)
+        .catch((e) => console.error(`run ${parsed.runId}:`, e))
+        .finally(() => activeRuns.delete(parsed.runId));
       res.writeHead(202, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ accepted: parsed.runId }));
     } catch (e) {

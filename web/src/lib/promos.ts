@@ -65,7 +65,7 @@ export async function ensurePromosProject(
 /** Render the promo shot across every image model. Re-runnable; old takes stay. */
 export async function runPromos(env: Env, o: { teamId: string; userId: string }): Promise<string> {
   const { project, shots, style } = await ensurePromosProject(env, o.teamId, o.userId);
-  return createRun(env, {
+  const r = await createRun(env, {
     teamId: o.teamId,
     userId: o.userId,
     project,
@@ -75,6 +75,7 @@ export async function runPromos(env: Env, o: { teamId: string; userId: string })
     iterations: 1,
     kind: 'full',
   });
+  return r.runId;
 }
 
 /** Newest succeeded promo take per model alias, for the catalog thumbs. */

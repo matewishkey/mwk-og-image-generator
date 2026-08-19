@@ -354,9 +354,18 @@ Six reviewers (3 research, 3 critique) + mate's answers fixed these; don't relit
 
 - **Artifacts as a viz layer: rejected on physics** (viewer sandbox blocks downloads,
   16MB data-URI cap, republish-per-poll). The CF site stays the eyes; chat is the hands.
-- **Local generation ships as DIRECT-INGEST (8b), not a pull queue**: createRun gains a
-  return-the-payload mode, `studio run` executes inline via an executor extracted from
-  engine/container/server.ts. No daemon, no claim endpoint. Site buttons keep the engine.
+- **Local generation is DIRECT-INGEST (shipped 8b), not a pull queue**: `studio run`
+  (the DEFAULT; `--engine` opts out) POSTs `{dispatch:'local'}`, createRun returns the
+  frozen EngineRunRequest instead of dispatching, and the CLI executes it via
+  `src/executor.ts` (`createExecutor` factory — the container's run adapter, extracted;
+  server.ts is now a thin HTTP shell over it). Site buttons keep the engine path.
+  Reshoot/reroll also still go to the engine — extend on demand, don't pre-build.
+  If the CLI dies mid-run the sweeper reclaims, same as a dead container. The deployed
+  container still runs its pre-extraction baked image — identical behaviour; the
+  refactor+Cancel-After ride the next natural engine deploy.
+- **The replicate client passes `URL` objects to its fetch option** — a wrapper doing
+  `input.url` gets undefined and every prediction fails "Invalid URL" (cost one live
+  run, 2026-08-19). Handle string | URL | Request and pass through on parse failure.
 - **Take ordinals are permanent**: `<shot>.<n>` by (created_at, id) over ALL of a shot's
   takes — computed identically in workspace.ts (JS) and zip/run-page SQL (ROW_NUMBER).
   Printed on every tile (`.ws-ordinal`), the lightbox, `studio takes`, and watch lines;

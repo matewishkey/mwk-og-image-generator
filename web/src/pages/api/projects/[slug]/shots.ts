@@ -126,7 +126,7 @@ export const POST: APIRoute = async (ctx) => {
 
   if (body.action === 'reshoot') {
     try {
-      const runId = await createRun(ENV, {
+      const { runId } = await createRun(ENV, {
         teamId: team.id,
         userId: user.id,
         project: bundle.project,

@@ -104,7 +104,7 @@ export async function runProofs(
   o: { teamId: string; userId: string; style: StyleRow },
 ): Promise<string> {
   const { project, shots } = await ensureProofsProject(env, o.teamId, o.userId);
-  return createRun(env, {
+  const r = await createRun(env, {
     teamId: o.teamId,
     userId: o.userId,
     project,
@@ -114,4 +114,5 @@ export async function runProofs(
     iterations: 1,
     kind: 'full',
   });
+  return r.runId;
 }

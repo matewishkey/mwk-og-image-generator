@@ -215,9 +215,19 @@ export interface CreateRunOpts {
   kind: 'full' | 'shot' | 'take';
   /** Re-roll: the take this run replaces; pointed at its replacement immediately. */
   supersedeTakeId?: string;
+  /** 'return' = direct-ingest (round 8b): skip the engine and hand the payload
+   * back to the caller, who executes it (the studio CLI, on the dev box) and
+   * posts the same events. If the caller then dies, the sweeper reclaims. */
+  dispatch?: 'engine' | 'return';
 }
 
-export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
+export interface CreateRunResult {
+  runId: string;
+  /** Present only for dispatch:'return' — the frozen EngineRunRequest. */
+  request?: EngineRunRequest;
+}
+
+export async function createRun(env: Env, o: CreateRunOpts): Promise<CreateRunResult> {
   const now = new Date();
   const nowIso = now.toISOString();
   const lease = new Date(now.getTime() + 30 * 60_000).toISOString();
@@ -370,10 +380,10 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
 
   await env.DB.batch(stmts);
 
-  // The run rows are durable; now hand the work to the engine. A failure here marks
-  // the run failed rather than leaving takes queued forever.
+  // The run rows are durable; now hand the work to whoever executes. A failure
+  // in here marks the run failed rather than leaving takes queued forever.
   try {
-    if (!env.ENGINE) throw new Error('ENGINE binding is not configured');
+    if (o.dispatch !== 'return' && !env.ENGINE) throw new Error('ENGINE binding is not configured');
     // The project's kit rides along so take CARDS carry the team's band, not
     // the engine's baked-in house brand. Absent kit = engine falls back.
     const kit = await env.DB.prepare(`SELECT config, mark_key FROM brand_kit WHERE id = ?1`)
@@ -398,8 +408,9 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
       brand: kit ? JSON.parse(kit.config) : undefined,
       markKey: kit?.mark_key ?? undefined,
     };
+    if (o.dispatch === 'return') return { runId, request: payload };
     const body = JSON.stringify(payload);
-    const res = await env.ENGINE.fetch('https://engine/run', {
+    const res = await env.ENGINE!.fetch('https://engine/run', {
       method: 'POST',
       headers: await seamHeaders(env.SEAM_SECRET, body),
       body,
@@ -418,5 +429,5 @@ export async function createRun(env: Env, o: CreateRunOpts): Promise<string> {
     throw e;
   }
 
-  return runId;
+  return { runId };
 }

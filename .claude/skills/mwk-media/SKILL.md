@@ -37,9 +37,11 @@ any doc.
 3. **Shots**: `studio add-shot <slug> -p "<scene, no medium/palette>" --label <word>`.
    Style is the LOOK, prompt is the SCENE — never mix the axes. `{shot N}` chains
    a character from shot N's picked take.
-4. **Run**: `studio run <slug> --watch` — the estimate prints first; the run
-   contact-sheet URL (`/projects/<slug>/runs/<runId>`) prints immediately: hand
-   it to mate, it fills in live.
+4. **Run**: `studio run <slug>` — renders ON THIS BOX (direct-ingest; the
+   td-sops env from the preflight is required) and prints each cell as it
+   lands. The run contact-sheet URL (`/projects/<slug>/runs/<runId>`) prints
+   immediately: hand it to mate, it fills in live. `--engine` falls back to
+   the Cloudflare container.
 5. **Describe + pick**: fetch a few `art_thumb` images via
    `curl -H "authorization: Bearer $MWK_STUDIO_TOKEN" <base>/img/<key>` and LOOK
    at them; describe takes by their speakable numbers ("1.3 has the best grin").

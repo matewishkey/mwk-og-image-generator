@@ -36,7 +36,9 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
   attach <slug> <refId>        attach a library image to every shot; --shot <id|position> scopes it
   detach <slug> <refId>        remove that attachment; --shot scopes it the same way
   ref-role <slug> <role...>    who the reference is in the scene (empty = clear)
-  run <slug>                   start a full run (project settings pick models); --watch to follow
+  run <slug>                   start a full run and render it ON THIS BOX (direct-ingest;
+                               needs the td-sops env loaded); --engine runs on Cloudflare
+                               instead; --watch follows from a second poll
   watch <slug>                 follow take status until the run settles; --interval <s> (default 5)
   takes <slug>                 the contact sheet as a table; --all includes hidden + superseded
   pick <slug> <take>           pick a succeeded take for its shot. Every <take> accepts the
@@ -304,15 +306,61 @@ async function watch(slug: string, intervalSec: number): Promise<void> {
 async function cmdRun(slug: string, argv: string[]): Promise<void> {
   const { values } = parseArgs({
     args: argv,
-    options: { watch: { type: 'boolean' }, interval: { type: 'string' } },
+    options: {
+      watch: { type: 'boolean' },
+      interval: { type: 'string' },
+      engine: { type: 'boolean' },
+    },
   });
-  const r = await api<{ runId: string; takes: number; estimatedUsd: number; url: string }>(
+
+  if (values.engine) {
+    const r = await api<{ runId: string; takes: number; estimatedUsd: number }>(
+      `/projects/${slug}/run`,
+      { method: 'POST', body: {} },
+    );
+    console.log(`✓ run ${r.runId} started on the engine — ${r.takes} takes, ~${money(r.estimatedUsd)}`);
+    console.log(studioUrl(`/projects/${slug}/runs/${r.runId}`));
+    if (values.watch) await watch(slug, values.interval ? Number(values.interval) : 5);
+    return;
+  }
+
+  // Direct-ingest (round 8b, the default): the web app creates the run rows
+  // and returns the frozen payload; THIS process executes it and posts the
+  // same HMAC events the engine would. If we die mid-run, the sweeper reclaims
+  // the tail and a re-run re-queues — same story as a dead container.
+  for (const name of ['SEAM_SECRET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'REPLICATE_API_TOKEN']) {
+    if (!process.env[name])
+      fail(`${name} is not set — load the td-sops env first, or pass --engine to run on Cloudflare`);
+  }
+  const r = await api<{ runId: string; takes: number; estimatedUsd: number; request: unknown }>(
     `/projects/${slug}/run`,
-    { method: 'POST', body: {} },
+    { method: 'POST', body: { dispatch: 'local' } },
   );
-  console.log(`✓ run ${r.runId} started — ${r.takes} takes, ~${money(r.estimatedUsd)}`);
-  console.log(studioUrl(`/projects/${slug}/runs/${r.runId}`));
-  if (values.watch) await watch(slug, values.interval ? Number(values.interval) : 5);
+  const runUrl = studioUrl(`/projects/${slug}/runs/${r.runId}`);
+  console.log(`✓ run ${r.runId} — ${r.takes} takes, ~${money(r.estimatedUsd)}, rendering HERE`);
+  console.log(runUrl);
+
+  const { createExecutor } = await import('./executor.ts');
+  const executor = createExecutor({
+    seamSecret: process.env.SEAM_SECRET!,
+    eventsUrl: `${BASE}/internal/events`,
+    r2: {
+      endpoint:
+        process.env.R2_ENDPOINT ?? 'https://ef7d622089ca4480c9f6fbf368f66787.r2.cloudflarestorage.com',
+      bucket: process.env.R2_BUCKET ?? 'mwk-studio',
+      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+    },
+    onCell: (cell, done, total) => {
+      const mark = cell.error ? `✗ ${cell.error.slice(0, 120)}` : `✓ ${money(cell.costUsd)}`;
+      console.log(`  [${done}/${total}] ${cell.style} · ${cell.model} #${cell.iteration}  ${mark}`);
+    },
+  });
+  const request = r.request as import('./seam.ts').EngineRunRequest;
+  const { refBytes, brand } = await executor.prepareRun(request);
+  await executor.executeRun(request, refBytes, brand);
+  console.log(`
+done — ${runUrl}`);
 }
 
 async function cmdWatch(slug: string, argv: string[]): Promise<void> {
