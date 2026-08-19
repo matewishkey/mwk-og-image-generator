@@ -440,6 +440,25 @@ as the candidate. Nothing errored; the picture just argued the opposite case.
 `--ref-role` emits an explicit assignment plus "everyone else is a different individual".
 Any scene with more than one person needs it. See `ComposeOpts.refRole`.
 
+## Music: four onboarded models, its own command, never part of the sweep
+
+`mwk-og music` (src/music.ts) — music is prompt -> model -> audio file; no styles, no
+band, no cells, and it must stay OUT of the gen sweep machinery. Facts read off
+Replicate pages on MUSIC_PRICES_VERIFIED_ON (re-read before editing an input map):
+
+- **lyria2** (google/lyria-2) $2/1000s: instrumental 48kHz stereo, NO duration knob
+  (~30s, it decides), and it serves PCM WAV behind an extension-less URL — the file
+  extension comes from sniffing the bytes (RIFF), never the URL.
+- **song15** (minimax/music-1.5) $0.03/track: full songs to 4 min with real vocals —
+  `lyrics` is a REQUIRED input ([verse]/[chorus] tags), `prompt` carries the style.
+- **stab25** (stability-ai/stable-audio-2.5) $0.20/track: music AND sound design;
+  the only one with a duration knob (1-190s).
+- **eleven** (elevenlabs/music) $8.30/1000s: premium arrangement control;
+  `force_instrumental` defaults TRUE — vocals need the --vocals flag.
+- meta/musicgen stays OFF the table deliberately: it is version-pinned (not an
+  official model), billed by GPU time, and the four above cover its range better.
+- Real music (e.g. Dylan) is copyrighted — generated originals are the free library.
+
 ## Video is the same pipeline, not a second one
 
 `src/video.ts` burns the band in with ffmpeg using the **same** `brandOverlay()` the stills

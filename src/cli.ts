@@ -30,6 +30,9 @@ const USAGE = `mwk-og — branded OG images from a style + a prompt
   models      list the models, their reference limits and their per-image price
   brand       re-brand an image you already have (no API call, no cost)
   montage     combine several picked cards into one branded image (no API call, no cost)
+  music       generate music/audio: -p <direction>, -m lyria2|song15|stab25|eleven
+              (--lyrics <file|text> for song15, --seconds, --vocals for eleven,
+              -n <count>, -o <dir>). mwk-og music -m list shows prices.
   studio      operate the live studio at og.matewishkey.com — mwk-og studio help
 
 gen
@@ -363,6 +366,52 @@ async function cmdBrand(argv: string[]): Promise<void> {
   console.log(`✓ ${dest}`);
 }
 
+async function cmdMusic(argv: string[]): Promise<void> {
+  const { MUSIC_MODELS, MUSIC_PRICES_VERIFIED_ON, resolveMusicModel, generateTrack } = await import('./music.ts');
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      prompt: { type: 'string', short: 'p' },
+      model: { type: 'string', short: 'm' },
+      lyrics: { type: 'string' },
+      seconds: { type: 'string' },
+      vocals: { type: 'boolean' },
+      seed: { type: 'string' },
+      count: { type: 'string', short: 'n' },
+      out: { type: 'string', short: 'o' },
+    },
+  });
+  if (values.model === 'list' || (!values.prompt && !values.model)) {
+    console.log(`music models, prices read off Replicate on ${MUSIC_PRICES_VERIFIED_ON}\n`);
+    for (const m of MUSIC_MODELS) {
+      console.log(`  ${m.alias.padEnd(8)} ${m.id}\n           ${m.price}\n           ${m.notes}\n`);
+    }
+    return;
+  }
+  if (!values.prompt) fail('-p <direction> is required (what the music should feel like)');
+  const spec = resolveMusicModel(values.model ?? 'lyria2');
+  let lyrics = values.lyrics;
+  if (lyrics && !lyrics.includes('\n') && /\.(txt|md)$/i.test(lyrics)) {
+    lyrics = await readFile(lyrics, 'utf8');
+  }
+  const opts = {
+    prompt: values.prompt,
+    lyrics,
+    seconds: values.seconds ? Number(values.seconds) : undefined,
+    vocals: values.vocals,
+    seed: values.seed ? Number(values.seed) : undefined,
+  };
+  const n = Math.max(1, Math.min(8, Number(values.count ?? 1)));
+  const outDir = values.out ?? `out/${new Date().toISOString().slice(0, 10)}_music`;
+  let spent = 0;
+  for (let i = 1; i <= n; i++) {
+    const file = await generateTrack(spec, opts, outDir, `${spec.alias}_${Date.now()}_${i}`);
+    spent += spec.estimate(opts);
+    console.log(`✓ ${file}`);
+  }
+  console.log(`spent ~$${spent.toFixed(2)} (${spec.label})`);
+}
+
 const [command, ...rest] = process.argv.slice(2);
 
 try {
@@ -384,6 +433,9 @@ try {
       break;
     case 'montage':
       await cmdMontage(rest);
+      break;
+    case 'music':
+      await cmdMusic(rest);
       break;
     case 'studio':
       await (await import('./studio.ts')).runStudio(rest);
