@@ -6,7 +6,7 @@ import Icon from '../components/Icon.astro';
 interface Props {
   title: string;
   /** Which rail item is current, if any. */
-  nav?: 'projects' | 'styles' | 'brand' | 'media' | 'quick' | 'models' | 'history' | 'team';
+  nav?: 'projects' | 'styles' | 'brand' | 'media' | 'quick' | 'models' | 'history' | 'team' | 'guide';
   /** When set, the rail shows this project's section under Projects. */
   project?: {
     slug: string;
@@ -26,6 +26,7 @@ const NAV = [
   { id: 'models', label: 'Models', href: '/models', icon: 'model' },
   { id: 'history', label: 'History', href: '/history', icon: 'history' },
   { id: 'team', label: 'Team', href: '/team', icon: 'team' },
+  { id: 'guide', label: 'Guide', href: '/guide', icon: 'glossary' },
 ] as const;
 
 const PROJECT_TABS = [

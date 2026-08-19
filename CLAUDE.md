@@ -389,7 +389,10 @@ Six reviewers (3 research, 3 critique) + mate's answers fixed these; don't relit
   `results?ids=d1,d2` — when ?ids= is set the page shows superseded/archived designs too
   (an explicitly linked id must always resolve).
 - **`.claude/skills/mwk-media/`** is the operator playbook + the SINGLE source of recipe
-  definitions (recipes.md); the 8c guide page must read that file, never copy it.
+  definitions (recipes.md). **`/guide` (shipped 8c-2) imports that file AT BUILD TIME**
+  (`recipes.md?raw`) — vocabulary, styles with proof thumbs (proofThumbs), templates by
+  picture count. Editing recipes.md requires a web deploy to reach the page; never
+  hand-copy recipe text anywhere.
 - Typography (8c) stays sharp+pango — satori rejected (no kerning/ligatures, broken
   variable fonts). Shadow = recolored+blurred duplicate layer; outline = ring composite.
 - Full history: ~/.claude/plans/pls-use-3-reviewer-lazy-dream.md.

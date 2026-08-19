@@ -1,0 +1,118 @@
+---
+/**
+ * The guide: what this studio can do and how to ask for it — vocabulary,
+ * a visual recap of the styles and templates you have, and the named recipes.
+ * Recipes are imported AT BUILD TIME from the mwk-media skill's recipes.md —
+ * that file is the single source; this page can never drift from what chat does.
+ */
+import Base from '../layouts/Base.astro';
+import { ENV } from '../lib/runtime';
+import { proofThumbs } from '../lib/proofs';
+import { layoutPanels, LayoutConfigSchema } from '../../../src/seam.ts';
+import recipesRaw from '../../../.claude/skills/mwk-media/recipes.md?raw';
+
+const env = ENV;
+const team = Astro.locals.team;
+if (!team) return new Response('No team', { status: 403 });
+
+const VOCAB: [string, string][] = [
+  ['style', 'a LOOK — palette, medium, lighting. Never a subject or a scene.'],
+  ['shot', 'a SCENE — what is happening. Never a medium or a palette. A project is a list of shots.'],
+  ['take', 'one rendered picture of one shot: model × style × iteration. Its number (1.3 = shot 1, take 3) is permanent.'],
+  ['run', 'one generation batch: shots × styles × models × iterations, with a cost estimate up front and a ledger entry per billed image.'],
+  ['reference', 'a photo the models are shown ("this is the person at the desk"). Lives in the media library, content-deduped.'],
+  ['template', 'a layout: how many pictures, where they sit, where the words go. House templates are read-only; yours are saved from designs.'],
+  ['design / revision', 'a template filled with actual takes and words, rendered as a finished card. Re-renders supersede only when byte-identical; every variation coexists.'],
+  ['format', 'an output size (OG card, story, banner…). One design can render to all of them.'],
+  ['brand kit', 'the band: colors, fonts, logo mark. The kit’s accent colors emphasis; dark kits carry a dark palette.'],
+  ['pack', 'a public, unguessable link bundling a project’s picks and designs for someone outside the team.'],
+];
+
+const styles = await env.DB.prepare(
+  `SELECT s.id, s.slug, s.name, t.kind AS team_kind FROM style s JOIN team t ON t.id = s.team_id
+    WHERE (s.team_id = ?1 OR t.kind = 'house') AND s.archived_at IS NULL ORDER BY s.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; slug: string; name: string; team_kind: string }>();
+const proofs = await proofThumbs(env, team.id);
+
+const layouts = await env.DB.prepare(
+  `SELECT l.id, l.name, l.config FROM layout l JOIN team t ON t.id = l.team_id
+    WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL
+      AND (t.kind = 'house' OR l.slug NOT LIKE 'gen-%') ORDER BY l.name`,
+)
+  .bind(team.id)
+  .all<{ id: string; name: string; config: string }>();
+const byCount = new Map<number, string[]>();
+for (const l of layouts.results) {
+  try {
+    const n = layoutPanels(LayoutConfigSchema.parse(JSON.parse(l.config)));
+    byCount.set(n, [...(byCount.get(n) ?? []), l.name]);
+  } catch {
+    /* unparseable layout stays off the guide */
+  }
+}
+const counts = [...byCount.keys()].sort((a, b) => a - b);
+
+// recipes.md: "## name — spoken form" headings + prose. A tiny split keeps the
+// file the single source without a markdown pipeline.
+const recipes = recipesRaw
+  .split(/\n## /)
+  .slice(1)
+  .map((block) => {
+    const [head, ...rest] = block.split('\n');
+    return { head: head!.trim(), body: rest.join(' ').replace(/\s+/g, ' ').trim() };
+  });
+---
+
+<Base title="Guide" nav="guide">
+  <h1>Guide</h1>
+  <p class="mute">What the studio can do and how to ask for it — in chat or here.</p>
+
+  <h2 id="vocabulary">Vocabulary</h2>
+  <dl class="vocab">
+    {VOCAB.map(([term, def]) => (
+      <div><dt>{term}</dt><dd>{def}</dd></div>
+    ))}
+  </dl>
+
+  <h2 id="styles">The styles you have ({styles.results.length})</h2>
+  <p class="mute">Every style, with its proof render where one exists. Full sheets on <a href="/styles">Styles</a>.</p>
+  <div class="gstyles">
+    {styles.results.map((s) => (
+      <a class="gstyle" href={`/styles/${s.slug}`}>
+        {proofs.get(s.id) ? <img src={`/img/${proofs.get(s.id)}`} alt="" loading="lazy" width={320} height={168} /> : <span class="gs-hold">no proof yet</span>}
+        <span>{s.name}{s.team_kind !== 'house' && <em class="mono faint"> team</em>}</span>
+      </a>
+    ))}
+  </div>
+
+  <h2 id="templates">Templates, by picture count</h2>
+  <p class="mute">Say a count and a subject — "compose 1.3 and 2.1" offers every 2-picture template.</p>
+  {counts.map((n) => (
+    <p><b class="mono">{n}</b> picture{n === 1 ? '' : 's'}: {byCount.get(n)!.join(' · ')}</p>
+  ))}
+
+  <h2 id="recipes">Recipes — say these in chat</h2>
+  {recipes.map((r) => (
+    <div class="grecipe" id={r.head.split(' ')[0]}>
+      <h3 class="mono">{r.head}</h3>
+      <p>{r.body}</p>
+    </div>
+  ))}
+</Base>
+
+<style>
+  .mute { color: var(--mute); }
+  .vocab div { display: grid; grid-template-columns: 10rem 1fr; gap: 0.8rem; padding: 0.45rem 0; border-bottom: 1px solid var(--line); }
+  .vocab dt { font: 700 0.85rem/1.5 var(--font-mono); }
+  .vocab dd { margin: 0; }
+  .gstyles { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.8rem; margin-top: 0.8rem; }
+  .gstyle { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; text-decoration: none; color: inherit; background: var(--surface); font-size: 0.8rem; }
+  .gstyle img { display: block; width: 100%; height: auto; background: var(--surface-2); }
+  .gstyle span { display: block; padding: 0.4rem 0.6rem; }
+  .gs-hold { display: grid; place-items: center; aspect-ratio: 1200/630; color: var(--faint); }
+  .grecipe { margin: 1rem 0; }
+  .grecipe h3 { margin-bottom: 0.2rem; }
+  .faint { color: var(--faint); }
+</style>
