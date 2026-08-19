@@ -164,6 +164,7 @@ styles      list the styles you have
 models      list the models, their reference limits and their per-image price
 brand       re-brand an image you already have (no API call, no cost)
 montage     combine several picked cards into one branded image (no API call, no cost)
+music       generate music/audio (lyria2, song15 with vocals, stab25, eleven) — `music -m list`
 studio      drive the live studio at og.matewishkey.com over its JSON API (see below)
 ```
 
