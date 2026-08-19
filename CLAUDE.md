@@ -360,9 +360,12 @@ Six reviewers (3 research, 3 critique) + mate's answers fixed these; don't relit
   `src/executor.ts` (`createExecutor` factory — the container's run adapter, extracted;
   server.ts is now a thin HTTP shell over it). Site buttons keep the engine path.
   Reshoot/reroll also still go to the engine — extend on demand, don't pre-build.
-  If the CLI dies mid-run the sweeper reclaims, same as a dead container. The deployed
-  container still runs its pre-extraction baked image — identical behaviour; the
-  refactor+Cancel-After ride the next natural engine deploy.
+  If the CLI dies mid-run the sweeper reclaims, same as a dead container. The round-8c
+  engine deploy (main-14, 2026-08-19) baked in the executor refactor, Cancel-After and
+  typography — and reproduced main-11 exactly: the first deploy showed a fresh digest
+  yet the instance booted the old image (a live render proved fields were stripped);
+  the INSTANCE_NAME re-bump fixed it. Treat the digest diff as necessary, never
+  sufficient — always verify with a render.
 - **The replicate client passes `URL` objects to its fetch option** — a wrapper doing
   `input.url` gets undefined and every prediction fails "Invalid URL" (cost one live
   run, 2026-08-19). Handle string | URL | Request and pass through on parse failure.
