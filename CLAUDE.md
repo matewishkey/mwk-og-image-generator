@@ -381,6 +381,13 @@ Six reviewers (3 research, 3 critique) + mate's answers fixed these; don't relit
   no longer gets its tail swept as abandoned. And every Replicate prediction carries
   `Cancel-After: 15m` (format verified 2026-08-19: integer seconds or 30s/5m/2h, 5s–24h)
   so a dead process can't bill unattended.
+- **Compose (shipped 8c-1)**: `renderFromPicks`/`composeFromTakes` in design-actions.ts —
+  explicit ORDERED take lists, `preselected: true` (the sanctioned replay shape), pinned
+  (`hasExplicitPanels`) templates refused, renderer rejects skipped. API: designs POST
+  `{takes, layoutId?}` + GET (templates with slot counts + revisions). CLI: `studio
+  compose --takes 1.3,2.1 [--template]`, `studio templates`. Landing URL is
+  `results?ids=d1,d2` — when ?ids= is set the page shows superseded/archived designs too
+  (an explicitly linked id must always resolve).
 - **`.claude/skills/mwk-media/`** is the operator playbook + the SINGLE source of recipe
   definitions (recipes.md); the 8c guide page must read that file, never copy it.
 - Typography (8c) stays sharp+pango — satori rejected (no kerning/ligatures, broken

@@ -23,6 +23,9 @@ const project = bundle.project;
 
 const q = Astro.url.searchParams;
 const fTemplate = q.get('template');
+// ?ids= — a hand-picked set (compose's landing URL, or any curated comparison
+// link chat hands out). Ids are immutable, so these links never rot.
+const fIds = (q.get('ids') ?? '').split(',').filter(Boolean).slice(0, 60);
 const fTheme = q.get('theme') === 'dark' ? 'dark' : q.get('theme') === 'light' ? 'light' : null;
 const showAll = q.get('versions') === 'all';
 const rUrl = (patch: Record<string, string | null>) => {
@@ -83,13 +86,14 @@ const designs = await env.DB.prepare(
           l.id AS layout_id, l.name AS layout_name, l.archived_at AS layout_archived,
           f.slug AS format_slug, f.name AS format_name
      FROM design d JOIN layout l ON l.id = d.layout_id JOIN format f ON f.id = d.format_id
-    WHERE d.project_id = ?1 AND d.superseded_by_id IS NULL
-      AND (l.archived_at IS NULL OR ?2)
+    WHERE d.project_id = ?1 AND (d.superseded_by_id IS NULL OR ?5 != '')
+      AND (l.archived_at IS NULL OR ?2 OR ?5 != '')
       AND (?3 IS NULL OR d.layout_id = ?3)
       AND (?4 IS NULL OR d.theme = ?4)
+      AND (?5 = '' OR ',' || ?5 || ',' LIKE '%,' || d.id || ',%')
     ORDER BY d.created_at DESC`,
 )
-  .bind(project.id, showAll ? 1 : 0, fTemplate, fTheme)
+  .bind(project.id, showAll ? 1 : 0, fTemplate, fTheme, fIds.join(','))
   .all<Row>();
 
 // One group per render set (collection), solos as themselves — newest first.

@@ -8,7 +8,7 @@
  * drafts exist, before anything is picked.
  */
 
-import { layoutPanels, LayoutConfigSchema, type LayoutConfig } from '../../../src/seam.ts';
+import { hasExplicitPanels, layoutPanels, LayoutConfigSchema, type LayoutConfig } from '../../../src/seam.ts';
 import { isEffect } from '../../../src/effects.ts';
 import { slugify } from '../../../src/style.ts';
 import { createCollection, createDesign, type FormatRow, type PanelInput } from './design';
@@ -230,6 +230,97 @@ export async function setPanel(
     throw new Error(`slot ${o.position} does not exist — this design has ${panels.length}`);
   panels[o.position - 1] = { takeId: take.id, artKey: take.art_key, label: take.label ?? undefined };
   return rerenderDesign(env, ctx, { designId: o.designId, overrides: { panels } });
+}
+
+/**
+ * Round 8c: assembly from an explicit picture list — the compose path. The
+ * caller names the takes IN ORDER (tap order = panel order); nothing is
+ * resolved from picks. Templates that pin their own shots (hasExplicitPanels)
+ * are refused: pouring a hand-ordered list into them would silently re-cast —
+ * that deliberate act stays recastDesign's job.
+ */
+export async function renderFromPicks(
+  env: Env,
+  ctx: DesignCtx,
+  o: { layoutId: string; takeIds: string[]; format: FormatRow; theme?: 'light' | 'dark' } & RenderWords,
+): Promise<string> {
+  if (!o.takeIds.length) throw new Error('name at least one take');
+  const cfg = await layoutConfigOf(env, o.layoutId);
+  if (hasExplicitPanels(cfg))
+    throw new Error('this template chooses its own shots — compose cannot re-cast it');
+  const needs = layoutPanels(cfg);
+  if (needs !== o.takeIds.length)
+    throw new Error(`this template takes exactly ${needs} picture${needs === 1 ? '' : 's'}, you named ${o.takeIds.length}`);
+
+  const marks = o.takeIds.map((_, i) => `?${i + 2}`).join(',');
+  const rows = await env.DB.prepare(
+    `SELECT t.id, t.art_key, sh.label FROM take t JOIN shot sh ON sh.id = t.shot_id
+      WHERE sh.project_id = ?1 AND t.status = 'succeeded' AND t.art_key IS NOT NULL
+        AND t.id IN (${marks})`,
+  )
+    .bind(ctx.project.id, ...o.takeIds)
+    .all<{ id: string; art_key: string; label: string | null }>();
+  const byId = new Map(rows.results.map((r) => [r.id, r]));
+  const panels: PanelInput[] = o.takeIds.map((id) => {
+    const r = byId.get(id);
+    if (!r) throw new Error(`take ${id} is not usable (missing, failed, or another project)`);
+    return { takeId: r.id, artKey: r.art_key, label: r.label ?? undefined };
+  });
+
+  return createDesign(env, {
+    teamId: ctx.teamId,
+    userId: ctx.userId,
+    projectId: ctx.project.id,
+    layoutId: o.layoutId,
+    brandKitId: ctx.project.brand_kit_id,
+    formatId: o.format.id,
+    theme: o.theme ?? 'light',
+    title: o.title?.trim() || undefined,
+    kicker: o.kicker?.trim() || undefined,
+    tagline: o.tagline?.trim() || undefined,
+    panels,
+    preselected: true, // panels ARE the cell order — the sanctioned replay shape
+  });
+}
+
+/**
+ * Compose: render EVERY count-matching template (house + named team, never
+ * pinned ones) with the named takes. Renderer rejects are skipped, like
+ * generateAndRender. Returns what rendered, for the results?ids= link.
+ */
+export async function composeFromTakes(
+  env: Env,
+  ctx: DesignCtx,
+  o: { takeIds: string[]; format: FormatRow; theme?: 'light' | 'dark' } & RenderWords,
+): Promise<{ designId: string; layoutId: string; layoutName: string }[]> {
+  const layouts = await env.DB.prepare(
+    `SELECT l.id, l.name, l.config FROM layout l JOIN team t ON t.id = l.team_id
+      WHERE (l.team_id = ?1 OR t.kind = 'house') AND l.archived_at IS NULL
+        AND (t.kind = 'house' OR l.slug NOT LIKE 'gen-%')
+      ORDER BY l.name`,
+  )
+    .bind(ctx.teamId)
+    .all<{ id: string; name: string; config: string }>();
+
+  const out: { designId: string; layoutId: string; layoutName: string }[] = [];
+  for (const l of layouts.results) {
+    let cfg: LayoutConfig;
+    try {
+      cfg = LayoutConfigSchema.parse(JSON.parse(l.config));
+    } catch {
+      continue;
+    }
+    if (hasExplicitPanels(cfg) || layoutPanels(cfg) !== o.takeIds.length) continue;
+    try {
+      const designId = await renderFromPicks(env, ctx, { ...o, layoutId: l.id });
+      out.push({ designId, layoutId: l.id, layoutName: l.name });
+    } catch (e) {
+      console.error(`compose: ${l.name} skipped: ${(e as Error).message}`);
+    }
+  }
+  if (!out.length)
+    throw new Error(`no template takes exactly ${o.takeIds.length} picture${o.takeIds.length === 1 ? '' : 's'}`);
+  return out;
 }
 
 /** Promote one design to every format — same layout, same words, and the

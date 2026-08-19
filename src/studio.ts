@@ -32,6 +32,10 @@ const USAGE = `mwk-og studio — drive the live studio; results appear in the br
   upload-ref <file…>           upload image(s) into the library (content-deduped)
   zip <slug> --takes 1.3,…     one zip of hand-picked takes (raw art + branded card each)
                                or --designs <id,…>; --out <file> downloads it here
+  templates <slug>             list templates: slug, picture count, house/team/pinned
+  compose <slug> --takes 1.3,2.1   render EVERY template matching that picture count with
+                               those takes (tap order = panel order); --template <slug>
+                               composes just one; --theme dark, --title/--kicker/--tagline
   name-ref <refId> <name>      name an image so we can talk about it
   attach <slug> <refId>        attach a library image to every shot; --shot <id|position> scopes it
   detach <slug> <refId>        remove that attachment; --shot scopes it the same way
@@ -392,6 +396,61 @@ async function cmdTakes(slug: string, argv: string[]): Promise<void> {
   console.log(`\n${studioUrl(r.url)}`);
 }
 
+interface TemplateInfo { id: string; slug: string; name: string; slots: number; pinned: boolean; house: boolean }
+
+async function cmdTemplates(slug: string): Promise<void> {
+  const r = await api<{ templates: TemplateInfo[] }>(`/projects/${slug}/designs`);
+  for (const t of r.templates) {
+    const marks = [t.house ? 'house' : 'team', t.pinned ? 'pinned' : ''].filter(Boolean).join(' ');
+    console.log(`  ${t.slug.padEnd(22)} ${String(t.slots)} picture${t.slots === 1 ? ' ' : 's'}  ${marks}  ${t.name}`);
+  }
+  console.log(`
+${studioUrl(`/projects/${slug}/design`)}`);
+}
+
+async function cmdCompose(slug: string, argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      takes: { type: 'string' },
+      template: { type: 'string' },
+      theme: { type: 'string' },
+      title: { type: 'string' },
+      kicker: { type: 'string' },
+      tagline: { type: 'string' },
+    },
+  });
+  if (!values.takes) fail('pass --takes 1.3,2.1,… (tap order = panel order)');
+  const tokens = multi([values.takes]);
+  const ids = await Promise.all(tokens.map((t) => resolveTake(slug, t)));
+  tokens.forEach((t, i) => console.log(`  slot ${i + 1} = ${t}`));
+
+  let layoutId: string | undefined;
+  if (values.template) {
+    const r = await api<{ templates: TemplateInfo[] }>(`/projects/${slug}/designs`);
+    const t = r.templates.find((x) => x.slug === values.template || x.id === values.template);
+    if (!t) fail(`no template "${values.template}" (see: mwk-og studio templates ${slug})`);
+    layoutId = t.id;
+  }
+
+  const r = await api<{ designs: { designId: string; layoutName?: string }[]; url: string }>(
+    `/projects/${slug}/designs`,
+    {
+      method: 'POST',
+      body: {
+        takes: ids,
+        ...(layoutId ? { layoutId } : {}),
+        ...(values.theme === 'dark' ? { theme: 'dark' } : {}),
+        ...(values.title ? { title: values.title } : {}),
+        ...(values.kicker ? { kicker: values.kicker } : {}),
+        ...(values.tagline ? { tagline: values.tagline } : {}),
+      },
+    },
+  );
+  for (const d of r.designs) console.log(`✓ ${d.layoutName ?? d.designId}`);
+  console.log(studioUrl(r.url));
+}
+
 async function cmdUploadRef(argv: string[]): Promise<void> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} });
   if (!positionals.length) fail('usage: mwk-og studio upload-ref <file…>');
@@ -546,6 +605,8 @@ export async function runStudio(argv: string[]): Promise<void> {
     }
     case 'refs': await cmdRefs(); break;
     case 'upload-ref': await cmdUploadRef(rest); break;
+    case 'templates': await cmdTemplates(needSlug()); break;
+    case 'compose': await cmdCompose(needSlug(), rest.slice(1)); break;
     case 'zip': await cmdZip(needSlug(), rest.slice(1)); break;
     case 'attach':
     case 'detach': {

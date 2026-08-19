@@ -53,9 +53,12 @@ any doc.
    art + branded card per take; thumbnails want the raw art). `--out <file>`
    downloads it locally instead.
 
-Cards/designs: `studio quick --image <f> --template <slug>` for one-offs;
-project designs live on `/projects/<slug>/design` (chat verbs for assembly are
-round 8c — until then hand the design page URL).
+Cards/designs: `studio compose <slug> --takes 1.3,2.1` renders EVERY template
+matching that picture count with those takes (tap order = panel order; $0
+composites) and prints ONE results URL showing exactly that set; `--template
+<slug>` composes just one (`studio templates <slug>` lists them). Words ride
+`--title/--kicker/--tagline`. `studio quick --image <f> --template <slug>` for
+no-project one-offs; fine control stays on `/projects/<slug>/design`.
 
 Music: `node src/cli.ts music …`; video models ride `gen`. Same axes rules.
 
