@@ -211,7 +211,7 @@ if (Astro.request.method === 'POST') {
       const { rendered, dropped } = await generateAndRender(env, ctx, {
         format: fmtRow ?? { ...ogFormat, safe_w: null, safe_h: null },
         brief: String(form.get('brief') ?? '').trim(),
-        n: Math.max(2, Math.min(20, Number(form.get('n') ?? 8))),
+        n: Math.max(2, Math.min(20, Number(form.get('n') ?? 20))),
         kitConfig: kitRow?.config,
       });
       return Astro.redirect(tUrl({ gen: `${rendered} rendered, ${dropped} dropped` }));
@@ -596,9 +596,9 @@ const words = {
               <span>How many</span>
               <select name="n">
                 <option value="4">4</option>
-                <option value="8" selected>8</option>
+                <option value="8">8</option>
                 <option value="12">12</option>
-                <option value="20">20</option>
+                <option value="20" selected>20</option>
               </select>
             </label>
             <label class="field">

@@ -419,10 +419,10 @@ export async function generateAndRender(
     const layoutId = ulid();
     await env.DB.prepare(
       `INSERT INTO layout (id, team_id, slug, name, config, brief, generated_by, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'openai/gpt-5.6-terra', ?7, ?7)`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?8, ?7, ?7)`,
     )
       .bind(layoutId, ctx.teamId, `gen-${layoutId.slice(-8).toLowerCase()}`, g.name,
-            JSON.stringify(g.config), o.brief || null, nowIso)
+            JSON.stringify(g.config), o.brief || null, nowIso, g.model)
       .run();
     inserted.push(layoutId);
   }

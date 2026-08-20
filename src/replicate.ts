@@ -10,6 +10,15 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import Replicate from 'replicate';
 
+// The model choice + input shapes live in a pure module both sides can import.
+export {
+  buildTextInput,
+  textFamily,
+  TEXT_MODEL_DEFAULT,
+  TEXT_MODEL_VISION,
+  type TextFamily,
+} from './text-models.ts';
+
 let client: Replicate | null = null;
 
 export function replicate(): Replicate {

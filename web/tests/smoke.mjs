@@ -64,16 +64,27 @@ await anon.goto(`${BASE}/projects`);
 check('anonymous /projects redirects to /login', anon.url().includes('/login'));
 await anon.close();
 
+// Pick a live project off the list rather than naming one: any given project
+// can be archived (and one was), and the smoke test must not depend on that.
+const SLUG =
+  process.env.SMOKE_PROJECT ??
+  (await page.evaluate(() =>
+    [...document.querySelectorAll('a[href^="/projects/"]')]
+      .map((a) => a.getAttribute('href').split('/')[2])
+      .find((s) => s && s !== 'new')));
+if (!SLUG) { console.error('no project on /projects to smoke against'); process.exit(2); }
+console.log(`     (smoking against project "${SLUG}")`);
+
 // overview: the old /takes URL redirects here; rows render with thumbs
-await page.goto(`${BASE}/projects/brick-launch/takes`);
-check('old /takes URL lands on the overview', page.url().endsWith('/projects/brick-launch/shots'));
+await page.goto(`${BASE}/projects/${SLUG}/takes`);
+check('old /takes URL lands on the overview', page.url().endsWith(`/projects/${SLUG}/shots`));
 await page.waitForSelector('astro-island:not([ssr])', { timeout: 20_000 });
 const rows = await page.locator('.ws-orow').count();
 check(`overview renders shot rows (${rows})`, rows >= 1);
 await page.locator('.ws-orow img, .ws-orow .list-ph').first().waitFor({ timeout: 15_000 });
 
 // a shot's own page: the contact sheet lives there now
-await page.goto(`${BASE}/projects/brick-launch/shots/1`);
+await page.goto(`${BASE}/projects/${SLUG}/shots/1`);
 await page.waitForSelector('astro-island:not([ssr])', { timeout: 20_000 });
 const imgs = page.locator('.take img');
 await imgs.first().waitFor({ timeout: 15_000 });
@@ -96,14 +107,14 @@ let previewPosts = 0;
 page.on('request', (r) => {
   if (r.method() === 'POST' && /\/api\/projects\/[^/]+\/previews/.test(r.url())) previewPosts++;
 });
-await page.goto(`${BASE}/projects/brick-launch/design`);
+await page.goto(`${BASE}/projects/${SLUG}/design`);
 const tplCards = await page.locator('.tpl-card').count();
 check(`template picker renders (${tplCards})`, tplCards >= 1);
 await page.waitForTimeout(1500);
 check(`no preview POSTs on design-page load (${previewPosts})`, previewPosts === 0);
 
-// results page: groups render (brick-launch has past renders)
-await page.goto(`${BASE}/projects/brick-launch/results`);
+// results page: groups render (the project needs past renders)
+await page.goto(`${BASE}/projects/${SLUG}/results`);
 check('results heading renders', (await page.locator('h1').textContent()) === 'Results');
 const rGroups = await page.locator('.rgroup').count();
 check(`results groups render (${rGroups})`, rGroups >= 1);
@@ -118,13 +129,13 @@ const rThumbOk = await page
 check('first result thumb decoded', rThumbOk);
 
 if (SHOTS) {
-  await page.goto(`${BASE}/projects/brick-launch/design`);
+  await page.goto(`${BASE}/projects/${SLUG}/design`);
   await page.waitForTimeout(1000);
   await page.screenshot({ path: `${SHOTS}/smoke-design.png`, fullPage: true });
-  await page.goto(`${BASE}/projects/brick-launch/results`);
+  await page.goto(`${BASE}/projects/${SLUG}/results`);
   await page.waitForTimeout(1000);
   await page.screenshot({ path: `${SHOTS}/smoke-results.png`, fullPage: true });
-  await page.goto(`${BASE}/projects/brick-launch/shots/1`);
+  await page.goto(`${BASE}/projects/${SLUG}/shots/1`);
   await page.waitForTimeout(3000);
   await page.screenshot({ path: `${SHOTS}/smoke-contact-sheet.png`, fullPage: true });
   await page.goto(`${BASE}/projects`);

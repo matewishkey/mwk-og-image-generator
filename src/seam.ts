@@ -352,6 +352,13 @@ export interface EngineGenerateRequest {
   system?: string;
   /** R2 keys of images the model should look at (sent as data URIs). */
   imageKeys?: string[];
+  /**
+   * Replicate text model to run. Omitted = the engine's default (a cheap one).
+   * The engine maps the slug to its family's input fields — the families
+   * genuinely disagree (some have no system field at all), so never assume.
+   * A request carrying imageKeys is forced onto a vision-capable model.
+   */
+  model?: string;
 }
 
 export interface EngineGenerateResponse {

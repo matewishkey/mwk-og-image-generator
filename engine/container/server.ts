@@ -17,7 +17,13 @@ import {
   type EngineRenderRequest,
   type EngineRunRequest,
 } from '../../src/seam.ts';
-import { runText } from '../../src/replicate.ts';
+import {
+  buildTextInput,
+  runText,
+  textFamily,
+  TEXT_MODEL_DEFAULT,
+  TEXT_MODEL_VISION,
+} from '../../src/replicate.ts';
 import { renderDesign } from './layout.ts';
 import { applyEffect } from './effects.ts';
 
@@ -74,13 +80,11 @@ const server = createServer((req, res) => {
         for (const key of g.imageKeys ?? []) {
           images.push(`data:image/png;base64,${(await r2Get(key)).toString('base64')}`);
         }
-        const text = await runText('openai/gpt-5.6-terra', {
-          prompt: g.prompt,
-          ...(g.system ? { system_prompt: g.system } : {}),
-          ...(images.length ? { image_input: images } : {}),
-          reasoning_effort: 'low',
-          verbosity: 'medium',
-        });
+        // Only the gpt-5 family here takes images; anything else must yield to a
+        // vision-capable model rather than silently drop the pictures.
+        const wanted = g.model ?? TEXT_MODEL_DEFAULT;
+        const model = images.length && textFamily(wanted) !== 'gpt5' ? TEXT_MODEL_VISION : wanted;
+        const text = await runText(model, buildTextInput(model, g.prompt, g.system, images));
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, text }));
         return;

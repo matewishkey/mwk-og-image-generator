@@ -1,9 +1,13 @@
 /**
  * The validated-config loop. The model writes CONFIGS; our engine draws the pixels.
  *
- * gpt-5.6-terra has no response_format (verified against its own schema), so the
+ * No model here has response_format (verified against their schemas), so the
  * guarantee is ours: fenced JSON -> parse -> Zod validate -> one repair turn with the
  * error text -> drop what still fails. A malformed variant is dropped, not shown.
+ *
+ * Two models, by role: the cheap default writes the bulk, and the pricier
+ * reliable one is spent only on the repair turn (or on the whole set when the
+ * cheap pass yields nothing). See src/text-models.ts for why those two.
  */
 
 import {
@@ -14,6 +18,7 @@ import {
   type LayoutConfig,
 } from '../../../src/seam.ts';
 import { z } from 'zod';
+import { TEXT_MODEL_DEFAULT, TEXT_MODEL_VISION } from '../../../src/text-models.ts';
 
 export async function askEngine(env: Env, req: EngineGenerateRequest): Promise<string> {
   if (!env.ENGINE) throw new Error('ENGINE binding is not configured');
@@ -161,6 +166,9 @@ Propose ${n} layout configs.`;
 export interface GeneratedLayout {
   name: string;
   config: LayoutConfig;
+  /** Which model actually wrote this one — recorded as provenance, so a
+   *  repaired layout is never credited to the model that got it wrong. */
+  model: string;
 }
 
 /** One generation pass + one repair turn; returns survivors and the drop count. */
@@ -170,9 +178,14 @@ export async function generateLayouts(
   brief: string,
   n: number,
 ): Promise<{ layouts: GeneratedLayout[]; dropped: number }> {
-  const raw = await askEngine(env, { prompt: layoutBrief(ctx, brief, n), system: LAYOUT_SYSTEM });
+  // The cheap model writes the bulk; the pricier one only fixes what failed.
+  const raw = await askEngine(env, {
+    prompt: layoutBrief(ctx, brief, n),
+    system: LAYOUT_SYSTEM,
+    model: TEXT_MODEL_DEFAULT,
+  });
 
-  const validate = (items: unknown[]) => {
+  const validate = (items: unknown[], model: string) => {
     const good: GeneratedLayout[] = [];
     const bad: { item: unknown; error: string }[] = [];
     for (const item of items) {
@@ -186,7 +199,7 @@ export async function generateLayouts(
         bad.push({ item, error: `needs ${layoutPanels(config)} panels but the inventory has ${ctx.panels.length}` });
         continue;
       }
-      good.push({ name, config });
+      good.push({ name, config, model });
     }
     return { good, bad };
   };
@@ -197,19 +210,22 @@ export async function generateLayouts(
   } catch (e) {
     items = [];
   }
-  let { good, bad } = validate(items);
+  let { good, bad } = validate(items, TEXT_MODEL_DEFAULT);
 
   if (bad.length || good.length === 0) {
-    // One repair turn with the error text; still-bad variants are dropped, not shown.
+    // One repair turn on the RELIABLE model — it either fixes the rejects or,
+    // when the cheap pass produced nothing usable at all, writes the set itself.
     const repair = await askEngine(env, {
       system: LAYOUT_SYSTEM,
-      prompt:
-        `${layoutBrief(ctx, brief, bad.length || n)}\n\nYour previous reply had invalid entries:\n` +
-        bad.map((b) => `- ${JSON.stringify(b.item)} -> ${b.error}`).join('\n') +
-        `\n\nReturn ONLY the corrected JSON array.`,
+      model: TEXT_MODEL_VISION,
+      prompt: good.length
+        ? `${layoutBrief(ctx, brief, bad.length || n)}\n\nA previous reply had invalid entries:\n` +
+          bad.map((b) => `- ${JSON.stringify(b.item)} -> ${b.error}`).join('\n') +
+          `\n\nReturn ONLY the corrected JSON array.`
+        : layoutBrief(ctx, brief, n),
     });
     try {
-      const retry = validate(extractJsonArray(repair));
+      const retry = validate(extractJsonArray(repair), TEXT_MODEL_VISION);
       good = [...good, ...retry.good];
       bad = retry.bad;
     } catch {
