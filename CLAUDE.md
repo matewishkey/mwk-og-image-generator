@@ -75,6 +75,17 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
 
 ## Phase 2 layout — og.matewishkey.com
 
+> **DECOMMISSIONED 2026-09-01.** Mate no longer needs the hosted studio, so every Cloudflare
+> resource below was deleted: workers `mwk-studio` + `mwk-studio-engine` (with its container and
+> both crons), D1 `mwk-studio`, R2 `mwk-studio`, and the `og.matewishkey.com` custom domain and
+> DNS record. **Nothing in this section is live** — the deploy runbook, the studio CLI, the smoke
+> test and every URL here describe infrastructure that no longer exists. The code, configs and
+> migrations stay in the repo, so a redeploy would need the D1/R2/domain recreated first (the
+> `database_id` in `web/wrangler.jsonc` is dead). The full data archive — 4,595 R2 objects and a
+> complete D1 dump — is at
+> `~/share/work/mat-mwk-og-image-generator/2026-09-01_cloudflare-teardown/`.
+> Phase 1 (the CLI: `node src/cli.ts`, music, video, montage) is untouched and still works.
+
 - `web/` — Astro SSR on Workers (worker `mwk-studio`, custom domain og.matewishkey.com;
   D1 `mwk-studio`, R2 `mwk-studio`). Deploy: `cd web && npm run deploy`. Bindings come
   from `wrangler.jsonc`; the build writes the resolved config to
