@@ -8,8 +8,10 @@ render from one model tells you nothing. Sixteen renders across four models and 
 laid out on one page, tells you immediately which direction is right. At roughly $0.05 an
 image that comparison costs less than the time spent staring at a single disappointing one.
 
-**Status: phase 1 (this CLI) + phase 2 (the web studio at og.matewishkey.com,
-invite-only — `web/` and `engine/` in this repo).** Both run the same `src/` library.
+**Status: phase 1 (this CLI) is live. Phase 2 (the web studio) was decommissioned on
+2026-09-01** — og.matewishkey.com and its Cloudflare resources are gone. The `web/` and
+`engine/` code stays in the repo and both still run the same `src/` library, but nothing
+is deployed; see the banner in `CLAUDE.md` before trying to use them.
 
 ```
 mwk-og gen -p "a recruiter asks a honey-trap question and the candidate pauses too long" \
@@ -165,7 +167,7 @@ models      list the models, their reference limits and their per-image price
 brand       re-brand an image you already have (no API call, no cost)
 montage     combine several picked cards into one branded image (no API call, no cost)
 music       generate music/audio (lyria2, song15 with vocals, stab25, eleven) — `music -m list`
-studio      drive the live studio at og.matewishkey.com over its JSON API (see below)
+studio      drive the web studio over its JSON API — DECOMMISSIONED, no host to talk to
 ```
 
 ## The montage — several picks, one card
@@ -220,12 +222,16 @@ Feed a still you already like in as the first frame: `--ref out/<run>/art/<card>
 `--seconds` picks the clip length; each model has its own permitted set and falls back to
 its default rather than erroring.
 
-## The studio
+## The studio (decommissioned)
 
-Phase 2 shipped: **og.matewishkey.com** — projects, contact sheets, picks, layouts,
-collections, style proof sheets and concept packs, running this same `src/` library in a
-Cloudflare container. Invite-only; the `web/` and `engine/` directories are its code, and
-`CLAUDE.md` carries the ops notes.
+Phase 2 was **og.matewishkey.com** — projects, contact sheets, picks, layouts, collections,
+style proof sheets and concept packs, running this same `src/` library in a Cloudflare
+container. It was retired on 2026-09-01 and every Cloudflare resource behind it was
+deleted, so the host no longer resolves and the `studio` command has nothing to reach.
+
+The `web/` and `engine/` directories keep their code and migrations, and `CLAUDE.md`
+keeps the ops notes with a banner explaining what is dead. Standing it back up would
+mean recreating the D1 database, the R2 bucket and the domain first.
 
 ## Licence
 

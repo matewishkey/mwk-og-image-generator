@@ -4,12 +4,33 @@ description: >
   Generate branded media with the MWK studio: OG images, YouTube-style
   thumbnails, social cards, music stings, video clips. Use when mate asks to
   generate/brainstorm/compose pictures or thumbnails, try styles, make a card
-  from an image, pick takes ("I like 1.3"), or download results. Drives the
-  live studio at og.matewishkey.com via the studio CLI; results land on URLs
-  mate opens in the browser.
+  from an image, pick takes ("I like 1.3"), or download results. DECOMMISSIONED
+  2026-09-01 — the studio it drove (og.matewishkey.com) no longer exists, so
+  every command here fails; read the warning before acting on any of it.
 ---
 
 # mwk-media — the studio operator playbook
+
+> ## ⛔ DECOMMISSIONED 2026-09-01 — do not run these commands
+>
+> The studio this playbook drives is **gone**. On 2026-09-01 the workers
+> `mwk-studio` and `mwk-studio-engine`, the D1 database, the R2 bucket and the
+> domain `og.matewishkey.com` were all deleted from Cloudflare at mate's request.
+> The host does not resolve.
+>
+> **Every `studio` command below will fail**, including `studio run` — it renders
+> images on this box, but it still POSTs to the web worker to create the run
+> first, so it dies at the same place as the rest. There is no fallback path and
+> no site for mate to watch.
+>
+> If mate asks for generated media, say the studio was retired and offer the
+> Phase 1 CLI instead (`node src/cli.ts` — sweeps, brand, montage, music, video),
+> which is untouched and writes files locally. Do not try to "fix" a failing
+> command here, and do not stand the infrastructure back up without asking.
+>
+> The recipes in `recipes.md` are still the real vocabulary and still useful as
+> prompt patterns. The data is archived at
+> `~/share/work/mat-mwk-og-image-generator/2026-09-01_cloudflare-teardown/`.
 
 You (Claude) are the hands; the site is mate's eyes. **Every action ends by
 handing mate a URL.** Print the run URL the moment a run exists, never only at

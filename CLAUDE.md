@@ -64,14 +64,18 @@ the five markup entities; sizes assume `dpi: 72`, which makes one point one pixe
 ## Secrets
 
 `REPLICATE_API_TOKEN` only, in `td-sops` at `apps/mwk-og-image-generator.enc.env`. One
-token covers the image models *and* `openai/gpt-5.6-terra`, which does the style
-brainstorming — that single-credential property is the reason this targets Replicate at all,
+token covers the image models *and* the text models that do the style brainstorming and
+layout writing (`src/text-models.ts` — the PURE module holding the model choice and each
+family's input shape; `TEXT_MODEL_DEFAULT` is qwen3-235b, `TEXT_MODEL_VISION` is
+gpt-5.6-terra, the pricier fixer and the only one that can see images)
+— that single-credential property is the reason this targets Replicate at all,
 so resist adding a direct OpenAI or Google client.
 
 ## Phase
 
-Phase 1 is the prompt workflow. Phase 2 (the web app) started landing 2026-08-14; `src/`
-is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
+Phase 1 is the prompt workflow and is live. Phase 2 (the web app) started landing
+2026-08-14 and was **decommissioned 2026-09-01** (banner below). `src/` is the library
+both call, so keep CLI concerns in `cli.ts` and nothing else.
 
 ## Phase 2 layout — og.matewishkey.com
 
@@ -159,7 +163,7 @@ is the library both call, so keep CLI concerns in `cli.ts` and nothing else.
   in the scoped style is a null slot, not a dropped row. Don't "optimise" the LEFT
   JOIN back to INNER.
 - **"Change it" (reviseDesign, design-actions.ts): the owner types an instruction on the
-  lead card** ("move the text left"), gpt-5.6-terra revises the layout config through the
+  lead card** ("move the text left"), the text model revises the layout config through the
   SAME validated-config loop as generate (brief carries the current config + instruction,
   n=1), the result lands as a new `rev-*` layout with the same name, the predecessor is
   archived (team layouts only), and the design re-renders — replaying the SOURCE
@@ -425,6 +429,10 @@ Six reviewers (3 research, 3 critique) + mate's answers fixed these; don't relit
 
 ## The studio CLI — how Claude drives the site
 
+> **DECOMMISSIONED 2026-09-01** — every `/api/*` route below is gone with the site. See
+> the Phase 2 layout banner. `studio run` is dead too: it renders locally, but it still
+> POSTs to the web worker to create the run first.
+
 `mwk-og studio …` (`src/studio.ts`) operates the LIVE studio over `/api/*` JSON routes so
 mate can watch results appear in his browser. Auth is a bearer token: `MWK_STUDIO_TOKEN`
 in td-sops (`apps/mwk-og-image-generator.enc.env`); `MWK_STUDIO_URL` overrides the base
@@ -437,6 +445,9 @@ routes are thin wrappers over the same libs the pages use (lib/projects.ts, lib/
 lib/runs.ts) — change behaviour there, not in the routes.
 
 ## Phase 2 ops — the runbook
+
+> **DECOMMISSIONED 2026-09-01** — nothing here is live: no workers to deploy, no D1 to
+> back up, no crons running, no site to smoke-test. Kept as the record of how it worked.
 
 - **Deploy web**: `cd web && npm run deploy` (build + `wrangler deploy -c dist/server/wrangler.json`
   — run it from `web/`, the -c path is relative). **Deploy engine**: bump `INSTANCE_NAME` in
